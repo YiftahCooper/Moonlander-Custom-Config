@@ -50,6 +50,19 @@ enum tap_dance_codes {
 #define DUAL_FUNC_3 LT(15, KC_8)
 #define DUAL_FUNC_4 LT(5, KC_F18)
 
+
+/* ORYX_MIDI_KEYCODE_ENUM_PATCH */
+// Custom MIDI bass-shifter keycodes. Declared here (above keymaps[]) so
+// the MIDI layer can reference them. Kept in sync with custom_code.c.
+// Based AFTER Oryx's enum custom_keycodes to avoid keycode collisions.
+#ifdef MIDI_ENABLE
+enum user_custom_keycodes {
+    MIDI_BASS_SHIFT_UP = (ST_MACRO_17 + 1),
+    MIDI_BASS_SHIFT_DOWN,
+    USER_CUSTOM_KEYCODES_SAFE_RANGE,
+};
+#endif  // MIDI_ENABLE
+
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
   [0] = LAYOUT_moonlander(
     KC_ESCAPE,      KC_1,           KC_2,           KC_3,           KC_4,           KC_5,           KC_EQUAL,                                       MEH_T(KC_PAGE_UP),KC_6,           KC_7,           KC_8,           KC_9,           KC_0,           KC_HOME,        
@@ -67,13 +80,13 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_LABK,        KC_RABK,        KC_TRANSPARENT,                                                                                                 KC_ENTER,       KC_LPRN,        KC_RPRN,        KC_LEFT,        KC_DOWN,        KC_RIGHT,       
     KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT,                 KC_DELETE,      KC_BSPC,        KC_SPACE
   ),
-  [2] = LAYOUT_moonlander(
-    KC_NO,          KC_NO,          KC_NO,          KC_NO,          KC_NO,          KC_NO,          KC_NO,                                          KC_NO,          KC_NO,          KC_NO,          KC_NO,          KC_NO,          KC_NO,          KC_NO,          
-    KC_NO,          KC_TRANSPARENT, KC_TRANSPARENT, KC_NO,          KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT,                                 KC_NO,          KC_TRANSPARENT, KC_TRANSPARENT, KC_NO,          KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, 
-    KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT,                                                                 KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, 
-    KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT,                                 KC_NO,          KC_NO,          KC_NO,          KC_NO,          KC_NO,          KC_NO,          
-    KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT,                                                                                                 LSFT(KC_ENTER), KC_NO,          KC_NO,          KC_NO,          KC_NO,          KC_NO,          
-    KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT,                 KC_TRANSPARENT, KC_TRANSPARENT, KC_NO
+  [2] = LAYOUT_moonlander(  /* ORYX_MIDI_LAYER2_PATCH */
+    KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO,
+    KC_NO, MI_Cs3, MI_Ds3, KC_NO, MI_Fs3, MI_Gs3, MI_As3, KC_NO, MI_Db4, MI_Eb4, KC_NO, MI_Gb4, MI_Ab4, MI_Bb4,
+    MI_C3, MI_D3, MI_E3, MI_F3, MI_G3, MI_A3, MI_B3, MI_C4, MI_D4, MI_E4, MI_F4, MI_G4, MI_A4, MI_B4,
+    MI_C2, MI_Cs2, MI_D2, MI_Ds2, MI_E2, MI_F2, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO,
+    MI_G2, MI_Gs2, MI_A2, MI_As2, MI_B2, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO,
+    KC_NO, MIDI_BASS_SHIFT_UP, MIDI_BASS_SHIFT_DOWN, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT
   ),
   [3] = LAYOUT_moonlander(
     HSV_0_0_0,      HSV_0_137_115,  TOGGLE_LAYER_COLOR,RGB_TOG,        TG(4),          HSV_0_0_0,      QK_BOOT,                                        KC_TRANSPARENT, ST_MACRO_12,    ST_MACRO_13,    ST_MACRO_14,    ST_MACRO_15,    ST_MACRO_16,    ST_MACRO_17,    

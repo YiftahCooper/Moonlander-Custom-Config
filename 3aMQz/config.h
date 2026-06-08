@@ -43,3 +43,6 @@
 #undef ENABLE_RGB_MATRIX_MULTISPLASH
 #undef ENABLE_RGB_MATRIX_SOLID_SPLASH
 #undef ENABLE_RGB_MATRIX_SOLID_MULTISPLASH
+
+// Advanced MIDI support (paired with MIDI_ENABLE=yes in rules.mk).
+#define MIDI_ADVANCED

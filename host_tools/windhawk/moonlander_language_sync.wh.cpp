@@ -1,17 +1,23 @@
 // ==WindhawkMod==
 // @id              moonlander-language-sync
 // @name            Moonlander Language Sync
-// @description     Maps F18 to language switching and syncs EN/HE state to QMK RGB via RAW HID.
-// @version         1.0.1
+// @description     Maps F18 to language switching, F22 to wrong-language text fixer, F19 to case cycling, and syncs EN/HE state to QMK RGB via RAW HID.
+// @version         1.2.0
 // @author          Yiftah + Codex
 // @include         explorer.exe
 // @compilerOptions -lsetupapi -lhid
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
-// This mod does two things:
-// 1) Optional: maps F18 to a language-switch shortcut (Win+Space by default).
-// 2) Sends current Windows input language state to QMK over RAW HID:
+// This mod provides three keyboard shortcuts and language state sync:
+//
+// 1) F18: Language-switch shortcut (Win+Space by default).
+// 2) F22: Wrong-language text fixer. Copies selected text, flips Hebrew/English
+//         characters based on physical key positions (kbdhebl3 layout), and pastes.
+// 3) F19: Case cycler. Copies selected text, cycles case (lower->UPPER->Title),
+//         and pastes.
+// 4) Language state sync: Sends current Windows input language state to QMK
+//    over RAW HID:
 //    - English -> 0
 //    - Hebrew  -> 1
 //
@@ -20,9 +26,10 @@
 // carries the language state (0 English, 1 Hebrew). Firmware reads the
 // mirrored bool via rawhid_state.status_led_control.
 //
-// Recommended keyboard mapping:
-// - Tap: KC_F18
-// - Hold: KC_LEFT_CTRL
+// Recommended keyboard mapping (use F-keys NOT already used in your QMK layout):
+// - F18: Tap for language switch, Hold for KC_LEFT_CTRL
+// - F22: Wrong-language text fixer
+// - F19: Case cycler
 // ==/WindhawkModReadme==
 
 // ==WindhawkModSettings==
@@ -33,6 +40,12 @@
 - shortcutMode: 1
   $name: F18 shortcut mode
   $description: 0=None, 1=Win+Space, 2=Alt+Shift, 3=Ctrl+Shift.
+- enableF22Hotkey: true
+  $name: Enable F22 wrong-language fixer
+  $description: If enabled, F22 copies selected text, flips Hebrew/English characters, and pastes.
+- enableF19Hotkey: true
+  $name: Enable F19 case cycler
+  $description: If enabled, F19 copies selected text, cycles case (lower->UPPER->Title), and pastes.
 - pollIntervalMs: 120
   $name: Poll interval (ms)
   $description: How often to read current Windows input language.
@@ -54,16 +67,20 @@
 #include <cwctype>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace {
 
-constexpr UINT kHotkeyId = 0xA701;
+constexpr UINT kHotkeyIdF18 = 0xA701;
+constexpr UINT kHotkeyIdF22 = 0xA702;
+constexpr UINT kHotkeyIdF19 = 0xA703;
 constexpr uint16_t kRawHidUsagePage = 0xFF60;
 constexpr uint16_t kRawHidUsage = 0x0061;
 constexpr uint8_t kOryxStatusLedControlCommand = 0x0A;
 constexpr uint8_t kLanguageSyncEnglish = 0x00;
 constexpr uint8_t kLanguageSyncHebrew = 0x01;
 constexpr DWORD kRetryWhenNotSentMs = 5000;
+constexpr DWORD kClipboardDelayMs = 100;
 
 enum ShortcutMode : int {
     ShortcutNone = 0,
@@ -75,6 +92,8 @@ enum ShortcutMode : int {
 struct Settings {
     bool enable_f18_hotkey = true;
     int shortcut_mode = ShortcutWinSpace;
+    bool enable_f22_hotkey = true;
+    bool enable_f19_hotkey = true;
     int poll_interval_ms = 120;
     bool only_moonlander = true;
     bool debug_logging = false;
@@ -83,6 +102,300 @@ struct Settings {
 Settings g_settings;
 HANDLE g_stop_event = nullptr;
 HANDLE g_worker_thread = nullptr;
+
+// Synthetic input guard to prevent the mod from intercepting its own Ctrl+C / Ctrl+V
+static bool g_is_synthesizing = false;
+
+// Forward declarations: send_key_event() and friends are defined later in the
+// file, but the clipboard helpers (send_ctrl_c/send_ctrl_v) call them first.
+void send_key_event(WORD virtual_key, bool pressed);
+void send_modifier_chord(WORD mod1, WORD mod2);
+
+// Hebrew/English character maps based on kbdhebl3 (Hebrew Standard) layout.
+// Maps based on PHYSICAL KEY POSITION: each English character maps to the Hebrew
+// character produced by the same physical key in Hebrew mode, and vice versa.
+// The whole file is kept ASCII-only; Hebrew is expressed via \u escapes below.
+
+// Hebrew letters are written as explicit \u escapes (not literal glyphs) so the
+// mapping is independent of source-file encoding and editor/compiler charset
+// assumptions. Reference (kbdhebl3 unshifted):
+//   qof=\u05E7 resh=\u05E8 alef=\u05D0 tet=\u05D8 vav=\u05D5 nun_final=\u05DF
+//   mem_final=\u05DD pe=\u05E4 shin=\u05E9 dalet=\u05D3 gimel=\u05D2 kaf=\u05DB
+//   ayin=\u05E2 yod=\u05D9 het=\u05D7 lamed=\u05DC kaf_final=\u05DA pe_final=\u05E3
+//   comma->tav=\u05EA zayin=\u05D6 samekh=\u05E1 bet=\u05D1 he=\u05D4 nun=\u05E0
+//   mem=\u05DE tsadi=\u05E6 tsadi_final=\u05E5
+
+// English -> Hebrew mapping (physical key position)
+static const std::unordered_map<wchar_t, wchar_t> kEnglishToHebrew = {
+    {'Q', L'/'}, {'W', L'\''}, {'E', L'\u05E7'}, {'R', L'\u05E8'}, {'T', L'\u05D0'}, {'Y', L'\u05D8'},
+    {'U', L'\u05D5'}, {'I', L'\u05DF'}, {'O', L'\u05DD'}, {'P', L'\u05E4'}, {'[', L'}'}, {']', L'{'}, {'\\', L'|'},
+    {'A', L'\u05E9'}, {'S', L'\u05D3'}, {'D', L'\u05D2'}, {'F', L'\u05DB'}, {'G', L'\u05E2'}, {'H', L'\u05D9'},
+    {'J', L'\u05D7'}, {'K', L'\u05DC'}, {'L', L'\u05DA'}, {';', L'\u05E3'}, {'\'', L','},
+    {'Z', L'\u05D6'}, {'X', L'\u05E1'}, {'C', L'\u05D1'}, {'V', L'\u05D4'}, {'B', L'\u05E0'},
+    {'N', L'\u05DE'}, {'M', L'\u05E6'}, {',', L'\u05EA'}, {'.', L'\u05E5'}, {'/', L'.'},
+    // Lowercase
+    {'q', L'/'}, {'w', L'\''}, {'e', L'\u05E7'}, {'r', L'\u05E8'}, {'t', L'\u05D0'}, {'y', L'\u05D8'},
+    {'u', L'\u05D5'}, {'i', L'\u05DF'}, {'o', L'\u05DD'}, {'p', L'\u05E4'},
+    {'a', L'\u05E9'}, {'s', L'\u05D3'}, {'d', L'\u05D2'}, {'f', L'\u05DB'}, {'g', L'\u05E2'}, {'h', L'\u05D9'},
+    {'j', L'\u05D7'}, {'k', L'\u05DC'}, {'l', L'\u05DA'},
+    {'z', L'\u05D6'}, {'x', L'\u05E1'}, {'c', L'\u05D1'}, {'v', L'\u05D4'}, {'b', L'\u05E0'},
+    {'n', L'\u05DE'}, {'m', L'\u05E6'}
+};
+
+// Hebrew -> English mapping (reverse of above)
+static const std::unordered_map<wchar_t, wchar_t> kHebrewToEnglish = {
+    {L'/', 'Q'}, {L'\'', 'W'}, {L'\u05E7', 'E'}, {L'\u05E8', 'R'}, {L'\u05D0', 'T'}, {L'\u05D8', 'Y'},
+    {L'\u05D5', 'U'}, {L'\u05DF', 'I'}, {L'\u05DD', 'O'}, {L'\u05E4', 'P'}, {L'}', '['}, {L'{', ']'}, {L'|', '\\'},
+    {L'\u05E9', 'A'}, {L'\u05D3', 'S'}, {L'\u05D2', 'D'}, {L'\u05DB', 'F'}, {L'\u05E2', 'G'}, {L'\u05D9', 'H'},
+    {L'\u05D7', 'J'}, {L'\u05DC', 'K'}, {L'\u05DA', 'L'}, {L'\u05E3', ';'}, {L',', '\''},
+    {L'\u05D6', 'Z'}, {L'\u05E1', 'X'}, {L'\u05D1', 'C'}, {L'\u05D4', 'V'}, {L'\u05E0', 'B'},
+    {L'\u05DE', 'N'}, {L'\u05E6', 'M'}, {L'\u05EA', ','}, {L'\u05E5', '.'}, {L'.', '/'}
+};
+
+// Clipboard helpers
+bool get_clipboard_text(std::wstring &text) {
+    if (!OpenClipboard(nullptr)) {
+        return false;
+    }
+    HANDLE h_data = GetClipboardData(CF_UNICODETEXT);
+    if (!h_data) {
+        CloseClipboard();
+        return false;
+    }
+    wchar_t *p_data = static_cast<wchar_t *>(GlobalLock(h_data));
+    if (!p_data) {
+        CloseClipboard();
+        return false;
+    }
+    text = p_data;
+    GlobalUnlock(h_data);
+    CloseClipboard();
+    return true;
+}
+
+bool set_clipboard_text(const std::wstring &text) {
+    if (!OpenClipboard(nullptr)) {
+        return false;
+    }
+    EmptyClipboard();
+    size_t size = (text.size() + 1) * sizeof(wchar_t);
+    HANDLE h_data = GlobalAlloc(GMEM_MOVEABLE, size);
+    if (!h_data) {
+        CloseClipboard();
+        return false;
+    }
+    wchar_t *p_data = static_cast<wchar_t *>(GlobalLock(h_data));
+    if (!p_data) {
+        GlobalFree(h_data);
+        CloseClipboard();
+        return false;
+    }
+    wcscpy_s(p_data, text.size() + 1, text.c_str());
+    GlobalUnlock(h_data);
+    SetClipboardData(CF_UNICODETEXT, h_data);
+    CloseClipboard();
+    return true;
+}
+
+// Release any physically-held modifiers so our synthetic Ctrl chord is clean
+// (e.g. a held Shift must not turn Ctrl+C into Ctrl+Shift+C). We only release;
+// the physical key-up events from the user will be no-ops afterwards.
+void clear_held_modifiers() {
+    const WORD mods[] = {VK_LSHIFT, VK_RSHIFT, VK_LMENU, VK_RMENU,
+                         VK_LWIN,   VK_RWIN,   VK_LCONTROL, VK_RCONTROL};
+    for (WORD vk : mods) {
+        if (GetAsyncKeyState(vk) & 0x8000) {
+            send_key_event(vk, false);
+        }
+    }
+}
+
+void send_ctrl_c() {
+    g_is_synthesizing = true;
+    clear_held_modifiers();
+    send_key_event(VK_LCONTROL, true);
+    send_key_event('C', true);
+    send_key_event('C', false);
+    send_key_event(VK_LCONTROL, false);
+    Sleep(kClipboardDelayMs);
+    g_is_synthesizing = false;
+}
+
+void send_ctrl_v() {
+    g_is_synthesizing = true;
+    clear_held_modifiers();
+    send_key_event(VK_LCONTROL, true);
+    send_key_event('V', true);
+    send_key_event('V', false);
+    send_key_event(VK_LCONTROL, false);
+    Sleep(kClipboardDelayMs);
+    g_is_synthesizing = false;
+}
+
+// Returns true if ch is a Hebrew letter (final + non-final forms live in the
+// Unicode block U+05D0..U+05EA).
+static inline bool is_hebrew_letter(wchar_t ch) {
+    return ch >= 0x05D0 && ch <= 0x05EA;
+}
+
+// Text transformation functions
+std::wstring fix_wrong_language(const std::wstring &text) {
+    // Detect direction using LETTERS only. Punctuation keys (',', '.', '/', etc.)
+    // appear in both maps and would skew a naive count, so we ignore them here.
+    int hebrew_count = 0;
+    int english_count = 0;
+    for (wchar_t ch : text) {
+        if (is_hebrew_letter(ch)) {
+            hebrew_count++;
+        } else if ((ch >= L'A' && ch <= L'Z') || (ch >= L'a' && ch <= L'z')) {
+            english_count++;
+        }
+    }
+    
+    // Use the appropriate map based on which language is predominant
+    const std::unordered_map<wchar_t, wchar_t> *map = nullptr;
+    if (hebrew_count > english_count) {
+        map = &kHebrewToEnglish;
+    } else if (english_count > hebrew_count) {
+        map = &kEnglishToHebrew;
+    } else {
+        // Equal or no recognizable letters, return as-is
+        return text;
+    }
+    
+    std::wstring result;
+    result.reserve(text.size());
+    for (wchar_t ch : text) {
+        auto it = map->find(ch);
+        if (it != map->end()) {
+            result += it->second;
+        } else {
+            result += ch;  // Keep characters not in the map as-is
+        }
+    }
+    return result;
+}
+
+// A word boundary is anything that is not a "word character". We treat only
+// letters as word characters here (digits/punct/space all start a new word),
+// which keeps Title-case detection and generation consistent.
+static inline bool is_word_char(wchar_t ch) {
+    return iswalpha(ch) != 0;
+}
+
+std::wstring to_upper_all(const std::wstring &text) {
+    std::wstring r = text;
+    for (wchar_t &ch : r) ch = towupper(ch);
+    return r;
+}
+
+std::wstring to_lower_all(const std::wstring &text) {
+    std::wstring r = text;
+    for (wchar_t &ch : r) ch = towlower(ch);
+    return r;
+}
+
+std::wstring to_title(const std::wstring &text) {
+    std::wstring r;
+    r.reserve(text.size());
+    bool at_word_start = true;
+    for (wchar_t ch : text) {
+        if (is_word_char(ch)) {
+            r += at_word_start ? towupper(ch) : towlower(ch);
+            at_word_start = false;
+        } else {
+            r += ch;
+            at_word_start = true;  // next letter begins a new word
+        }
+    }
+    return r;
+}
+
+std::wstring cycle_case(const std::wstring &text) {
+    if (text.empty()) {
+        return text;
+    }
+
+    // Classify the current state by comparing against canonical forms.
+    // Only consider strings that actually contain cased letters.
+    bool has_alpha = false;
+    for (wchar_t ch : text) {
+        if (iswalpha(ch)) {
+            has_alpha = true;
+            break;
+        }
+    }
+    if (!has_alpha) {
+        return text;  // nothing to cycle
+    }
+
+    std::wstring lower = to_lower_all(text);
+    std::wstring upper = to_upper_all(text);
+    std::wstring title = to_title(text);
+
+    // Cycle order: lower -> UPPER -> Title -> lower.
+    // Use canonical comparison so ambiguous inputs fall through sensibly.
+    if (text == lower) {
+        return upper;
+    } else if (text == upper) {
+        // If Title == UPPER (e.g. single-letter words), skip to lower to avoid
+        // a no-op that would feel like the key did nothing.
+        return (title != upper) ? title : lower;
+    } else if (text == title) {
+        return lower;
+    }
+
+    // Mixed/unknown case: normalize to lowercase as a predictable starting point.
+    return lower;
+}
+
+void fix_wrong_language_clipboard() {
+    std::wstring text;
+    if (!get_clipboard_text(text)) {
+        if (g_settings.debug_logging) {
+            Wh_Log(L"Failed to read clipboard for F22");
+        }
+        return;
+    }
+    
+    std::wstring transformed = fix_wrong_language(text);
+    if (transformed != text) {
+        if (set_clipboard_text(transformed)) {
+            send_ctrl_v();
+            if (g_settings.debug_logging) {
+                Wh_Log(L"F22: Flipped %zu characters", transformed.size());
+            }
+        } else if (g_settings.debug_logging) {
+            Wh_Log(L"F22: Failed to write clipboard");
+        }
+    } else if (g_settings.debug_logging) {
+        Wh_Log(L"F22: No transformation needed");
+    }
+}
+
+void cycle_case_clipboard() {
+    std::wstring text;
+    if (!get_clipboard_text(text)) {
+        if (g_settings.debug_logging) {
+            Wh_Log(L"Failed to read clipboard for F19");
+        }
+        return;
+    }
+    
+    std::wstring transformed = cycle_case(text);
+    if (transformed != text) {
+        if (set_clipboard_text(transformed)) {
+            send_ctrl_v();
+            if (g_settings.debug_logging) {
+                Wh_Log(L"F19: Cycled case");
+            }
+        } else if (g_settings.debug_logging) {
+            Wh_Log(L"F19: Failed to write clipboard");
+        }
+    } else if (g_settings.debug_logging) {
+        Wh_Log(L"F19: No transformation needed");
+    }
+}
 
 std::wstring to_lower_copy(const wchar_t *text) {
     if (!text) {
@@ -112,6 +425,9 @@ void load_settings() {
         shortcut_mode = ShortcutWinSpace;
     }
     g_settings.shortcut_mode = shortcut_mode;
+
+    g_settings.enable_f22_hotkey = Wh_GetIntSetting(L"enableF22Hotkey") != 0;
+    g_settings.enable_f19_hotkey = Wh_GetIntSetting(L"enableF19Hotkey") != 0;
 
     int poll_interval_ms = Wh_GetIntSetting(L"pollIntervalMs");
     if (poll_interval_ms < 20 || poll_interval_ms > 2000) {
@@ -323,11 +639,28 @@ DWORD WINAPI worker_thread_proc(void *) {
     // Create message queue for WM_HOTKEY.
     PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
 
-    bool hotkey_registered = false;
+    bool f18_hotkey_registered = false;
+    bool f22_hotkey_registered = false;
+    bool f19_hotkey_registered = false;
+
     if (g_settings.enable_f18_hotkey && g_settings.shortcut_mode != ShortcutNone) {
-        hotkey_registered = RegisterHotKey(nullptr, kHotkeyId, MOD_NOREPEAT, VK_F18) == TRUE;
-        if (!hotkey_registered && g_settings.debug_logging) {
+        f18_hotkey_registered = RegisterHotKey(nullptr, kHotkeyIdF18, MOD_NOREPEAT, VK_F18) == TRUE;
+        if (!f18_hotkey_registered && g_settings.debug_logging) {
             Wh_Log(L"RegisterHotKey(VK_F18) failed: %lu", GetLastError());
+        }
+    }
+
+    if (g_settings.enable_f22_hotkey) {
+        f22_hotkey_registered = RegisterHotKey(nullptr, kHotkeyIdF22, MOD_NOREPEAT, VK_F22) == TRUE;
+        if (!f22_hotkey_registered && g_settings.debug_logging) {
+            Wh_Log(L"RegisterHotKey(VK_F22) failed: %lu", GetLastError());
+        }
+    }
+
+    if (g_settings.enable_f19_hotkey) {
+        f19_hotkey_registered = RegisterHotKey(nullptr, kHotkeyIdF19, MOD_NOREPEAT, VK_F19) == TRUE;
+        if (!f19_hotkey_registered && g_settings.debug_logging) {
+            Wh_Log(L"RegisterHotKey(VK_F19) failed: %lu", GetLastError());
         }
     }
 
@@ -339,12 +672,24 @@ DWORD WINAPI worker_thread_proc(void *) {
 
     while (WaitForSingleObject(g_stop_event, 0) == WAIT_TIMEOUT) {
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_HOTKEY && msg.wParam == kHotkeyId) {
-                trigger_language_shortcut();
-                have_last_state = false;  // force immediate state refresh
-                last_send_succeeded = false;
-                next_unsent_retry_tick = 0;
-                last_poll_tick = 0;
+            if (msg.message == WM_HOTKEY) {
+                if (g_is_synthesizing) {
+                    continue;  // Ignore hotkeys during synthetic input
+                }
+
+                if (msg.wParam == kHotkeyIdF18) {
+                    trigger_language_shortcut();
+                    have_last_state = false;  // force immediate state refresh
+                    last_send_succeeded = false;
+                    next_unsent_retry_tick = 0;
+                    last_poll_tick = 0;
+                } else if (msg.wParam == kHotkeyIdF22) {
+                    send_ctrl_c();
+                    fix_wrong_language_clipboard();
+                } else if (msg.wParam == kHotkeyIdF19) {
+                    send_ctrl_c();
+                    cycle_case_clipboard();
+                }
             }
         }
 
@@ -378,8 +723,14 @@ DWORD WINAPI worker_thread_proc(void *) {
         Sleep(10);
     }
 
-    if (hotkey_registered) {
-        UnregisterHotKey(nullptr, kHotkeyId);
+    if (f18_hotkey_registered) {
+        UnregisterHotKey(nullptr, kHotkeyIdF18);
+    }
+    if (f22_hotkey_registered) {
+        UnregisterHotKey(nullptr, kHotkeyIdF22);
+    }
+    if (f19_hotkey_registered) {
+        UnregisterHotKey(nullptr, kHotkeyIdF19);
     }
 
     return 0;

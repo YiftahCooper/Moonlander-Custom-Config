@@ -267,6 +267,10 @@ jobs:
           fi
 
           git commit -m "${MSG:-Sync Oryx layout source} [oryx:${HASH_ID:-unknown} geom:${GEOMETRY}]"
+          
+          # Pull latest changes and rebase to prevent exit code 128 push failures
+          git pull --rebase origin "${BRANCH}"
+          
           git push origin "HEAD:${BRANCH}"
 
           echo "Git status for ${LAYOUT_ID} after push:"

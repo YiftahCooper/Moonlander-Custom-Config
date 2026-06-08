@@ -4,6 +4,10 @@ import sys
 from typing import Callable
 
 PATCH_MARKER = "ORYX_FN24_NUMDOT_SPACE_PATCH"
+MIDI_ENUM_MARKER = "ORYX_MIDI_KEYCODE_ENUM_PATCH"
+MIDI_LAYER_MARKER = "ORYX_MIDI_LAYER2_PATCH"
+# The MIDI keys live on layer 2 (confirmed against the live Oryx export).
+MIDI_LAYER_INDEX = 2
 LANGUAGE_TOGGLE_MARKER = "ORYX_LANG_TOGGLE_PATCH"
 LANGUAGE_RESYNC_MARKER = "ORYX_LANG_RESYNC_PATCH"
 LANGUAGE_RGB_MARKER = "ORYX_LANG_RGB_PATCH"
@@ -96,6 +100,90 @@ def _find_matching_brace(content: str, open_idx: int) -> int:
         if ch == "{":
             depth += 1
         elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+            if depth < 0:
+                return -1
+        i += 1
+
+    return -1
+
+
+def _find_matching_paren(content: str, open_idx: int) -> int:
+    """
+    Return index of the matching ')' for the '(' at open_idx.
+    Skips parens inside strings, char literals, and comments.
+    """
+    if open_idx < 0 or open_idx >= len(content) or content[open_idx] != "(":
+        return -1
+
+    depth = 0
+    i = open_idx
+    in_string = False
+    in_char = False
+    in_line_comment = False
+    in_block_comment = False
+    escape = False
+
+    while i < len(content):
+        ch = content[i]
+        nxt = content[i + 1] if i + 1 < len(content) else ""
+
+        if in_line_comment:
+            if ch == "\n":
+                in_line_comment = False
+            i += 1
+            continue
+
+        if in_block_comment:
+            if ch == "*" and nxt == "/":
+                in_block_comment = False
+                i += 2
+                continue
+            i += 1
+            continue
+
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+
+        if in_char:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == "'":
+                in_char = False
+            i += 1
+            continue
+
+        if ch == "/" and nxt == "/":
+            in_line_comment = True
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            in_block_comment = True
+            i += 2
+            continue
+        if ch == '"':
+            in_string = True
+            i += 1
+            continue
+        if ch == "'":
+            in_char = True
+            i += 1
+            continue
+
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
             depth -= 1
             if depth == 0:
                 return i
@@ -747,6 +835,265 @@ def _relax_aggressive_tapping_terms(content: str) -> tuple[str, int]:
     return _replace_function_body(content, "get_tapping_term", body_new), changes
 
 
+def _find_oryx_keycode_enum_base(content: str) -> str:
+    """
+    Determine the keycode value our custom enum must start at so it does NOT
+    collide with Oryx's own `enum custom_keycodes`.
+
+    Oryx emits e.g. `enum custom_keycodes { RGB_SLD = ZSA_SAFE_RANGE, HSV_..., ST_MACRO_17 };`
+    where ZSA_SAFE_RANGE == SAFE_RANGE. If we also anchor at SAFE_RANGE, our
+    MIDI_BASS_SHIFT_* keycodes alias Oryx's first members (RGB_SLD, HSV_0_0_0),
+    which would let our handler swallow those keys. So we base our enum at the
+    LAST member of the Oryx enum + 1.
+
+    Returns a C expression string to use as the base value.
+    """
+    enum_pat = re.compile(r"\benum\s+custom_keycodes\s*\{")
+    m = enum_pat.search(content)
+    if not m:
+        # No Oryx custom keycode enum present; SAFE_RANGE is safe to use.
+        return "SAFE_RANGE"
+
+    open_brace_idx = content.find("{", m.start())
+    if open_brace_idx == -1:
+        return "SAFE_RANGE"
+    close_brace_idx = _find_matching_brace(content, open_brace_idx)
+    if close_brace_idx == -1:
+        return "SAFE_RANGE"
+
+    body = content[open_brace_idx + 1 : close_brace_idx]
+    # Collect identifiers in declaration order, ignoring any "= value" parts.
+    members = []
+    for raw in body.split(","):
+        token = raw.strip()
+        if not token:
+            continue
+        name = token.split("=", 1)[0].strip()
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            members.append(name)
+
+    if not members:
+        return "SAFE_RANGE"
+
+    return f"({members[-1]} + 1)"
+
+
+def _inject_midi_keycode_enum(content: str) -> tuple[str, bool]:
+    """
+    Inject `enum user_custom_keycodes` near the TOP of keymap.c (after the
+    #include lines, before keymaps[]). keymaps[2] references MIDI_BASS_SHIFT_*,
+    which are our custom keycodes, so they must be declared before keymaps[].
+
+    Kept in sync (identical names) with custom_qmk/custom_code.c. The base value
+    is placed AFTER Oryx's own custom_keycodes enum to avoid keycode collisions.
+    Wrapped in #ifdef MIDI_ENABLE so a non-MIDI build still compiles.
+    """
+    if MIDI_ENUM_MARKER in content:
+        return content, True
+
+    enum_base = _find_oryx_keycode_enum_base(content)
+
+    enum_block = (
+        "\n"
+        f"/* {MIDI_ENUM_MARKER} */\n"
+        "// Custom MIDI bass-shifter keycodes. Declared here (above keymaps[]) so\n"
+        "// the MIDI layer can reference them. Kept in sync with custom_code.c.\n"
+        "// Based AFTER Oryx's enum custom_keycodes to avoid keycode collisions.\n"
+        "#ifdef MIDI_ENABLE\n"
+        "enum user_custom_keycodes {\n"
+        f"    MIDI_BASS_SHIFT_UP = {enum_base},\n"
+        "    MIDI_BASS_SHIFT_DOWN,\n"
+        "    USER_CUSTOM_KEYCODES_SAFE_RANGE,\n"
+        "};\n"
+        "#endif  // MIDI_ENABLE\n"
+        "\n"
+    )
+
+    # Insert just before the keymaps[] definition so the enum precedes its use.
+    keymaps_pat = re.compile(r"const\s+uint16_t\s+PROGMEM\s+keymaps\s*\[")
+    m = keymaps_pat.search(content)
+    if m:
+        insert_idx = m.start()
+        return content[:insert_idx] + enum_block + content[insert_idx:], True
+
+    # Fallback: after the last include.
+    include_matches = list(re.finditer(r"^\s*#include[^\n]*\n", content, flags=re.MULTILINE))
+    if include_matches:
+        insert_idx = include_matches[-1].end()
+        return content[:insert_idx] + enum_block + content[insert_idx:], True
+
+    return content, False
+
+
+def _build_midi_layer_body() -> str:
+    """
+    Construct the LAYOUT_moonlander(...) argument list for the MIDI layer.
+
+    Layout (confirmed in the plan / against the Oryx screenshot):
+      Row 0 (k00..k0d): disabled top row (KC_NO x14)
+      Row 1 (k10..k1d): sharps, biased right
+      Row 2 (k20..k2d): naturals C3..B3 (left) / C4..B4 (right)
+      Row 3 (k30..k3b): bass C2..F2 (left BASS1-6) / KC_NO x6 (right)
+      Row 4 (k40..k4b): bass G2..B2 (left BASS7-11) + KC_NO,
+                        then KC_NO (was LSFT(KC_ENTER) at k46) + KC_NO x5
+      Row 5 (k50..k55): KC_NO, MIDI_BASS_SHIFT_UP (k51), MIDI_BASS_SHIFT_DOWN (k52),
+                        KC_TRANSPARENT x3 (right thumb, unused on this layer)
+
+    Note: enharmonic flat aliases (MI_Db4 etc.) keep the right-hand sharp labels
+    matching the Oryx legends.
+    """
+    rows = [
+        # Row 0: disabled top row
+        ["KC_NO"] * 14,
+        # Row 1: sharps (biased right; gaps stay KC_NO)
+        ["KC_NO", "MI_Cs3", "MI_Ds3", "KC_NO", "MI_Fs3", "MI_Gs3", "MI_As3",
+         "KC_NO", "MI_Db4", "MI_Eb4", "KC_NO", "MI_Gb4", "MI_Ab4", "MI_Bb4"],
+        # Row 2: naturals C3..B3 (left) / C4..B4 (right)
+        ["MI_C3", "MI_D3", "MI_E3", "MI_F3", "MI_G3", "MI_A3", "MI_B3",
+         "MI_C4", "MI_D4", "MI_E4", "MI_F4", "MI_G4", "MI_A4", "MI_B4"],
+        # Row 3: bass BASS1-6 (C2..F2) left, right disabled
+        ["MI_C2", "MI_Cs2", "MI_D2", "MI_Ds2", "MI_E2", "MI_F2",
+         "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO"],
+        # Row 4: bass BASS7-11 (G2..B2) + disabled extra; k46 neutralized
+        ["MI_G2", "MI_Gs2", "MI_A2", "MI_As2", "MI_B2", "KC_NO",
+         "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO"],
+        # Row 5: thumb cluster. Purple-lit left thumbs k51/k52 = shifters.
+        ["KC_NO", "MIDI_BASS_SHIFT_UP", "MIDI_BASS_SHIFT_DOWN",
+         "KC_TRANSPARENT", "KC_TRANSPARENT", "KC_TRANSPARENT"],
+    ]
+
+    lines = []
+    for row in rows:
+        lines.append("    " + ", ".join(row) + ",")
+    # Drop the trailing comma on the very last argument.
+    body = "\n".join(lines)
+    body = body.rstrip()
+    if body.endswith(","):
+        body = body[:-1]
+    return "\n" + body + "\n  "
+
+
+def _inject_midi_layer(content: str) -> tuple[str, bool]:
+    """
+    Overwrite the layer-2 keymap body in place with real MIDI keycodes.
+
+    The Oryx export leaves layer 2 as KC_TRANSPARENT / KC_NO placeholders; this
+    rewrites the argument list of `[2] = LAYOUT_moonlander( ... )`. The ledmap
+    for layer 2 is already correct from Oryx and is intentionally left untouched.
+    """
+    if MIDI_LAYER_MARKER in content:
+        return content, True
+
+    layer_pat = re.compile(
+        rf"\[\s*{MIDI_LAYER_INDEX}\s*\]\s*=\s*LAYOUT(?:_moonlander)?\s*\("
+    )
+    m = layer_pat.search(content)
+    if not m:
+        return content, False
+
+    open_paren_idx = content.find("(", m.start())
+    if open_paren_idx == -1:
+        return content, False
+
+    close_paren_idx = _find_matching_paren(content, open_paren_idx)
+    if close_paren_idx == -1:
+        return content, False
+
+    new_body = _build_midi_layer_body()
+    marker = f"  /* {MIDI_LAYER_MARKER} */"
+    replacement = (
+        content[: open_paren_idx + 1]
+        + marker
+        + new_body
+        + content[close_paren_idx:]
+    )
+    return replacement, True
+
+
+def patch_config_h_midi(layout_dir: str) -> None:
+    """
+    Enable ADVANCED MIDI in config.h (paired with MIDI_ENABLE=yes in rules.mk).
+
+    We use MIDI_ADVANCED (not MIDI_BASIC) because:
+      - Only MIDI_ADVANCED routes note keycodes through process_midi(), which
+        decodes the note BY KEYCODE VALUE (midi_compute_note) and tracks
+        note-on/off. This is what lets the per-key bass shifter forward a
+        transposed note keycode and have it sound correctly.
+      - MIDI_BASIC instead routes notes through process_music(), which requires
+        MIDI mode to be toggled on (MI_ON) and computes notes from MATRIX
+        POSITION, ignoring the note keycode entirely.
+      - MIDI_ADVANCED is a strict superset of MIDI_BASIC (all note keycodes plus
+        octave/transpose/velocity/channel), so it is the future-proof choice.
+    """
+    config_path = os.path.join(layout_dir, "config.h")
+    if not os.path.exists(config_path):
+        print(f"Warning: {config_path} not found; cannot inject MIDI_ADVANCED.")
+        return
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # Migrate any previously-injected MIDI_BASIC define to MIDI_ADVANCED.
+    basic_pat = re.compile(r"^[ \t]*#define[ \t]+MIDI_BASIC\b.*$", flags=re.MULTILINE)
+    if basic_pat.search(content):
+        content = basic_pat.sub("#define MIDI_ADVANCED", content)
+        # Also fix the stale "Basic MIDI support" comment if present.
+        content = content.replace(
+            "// Basic MIDI support (paired with MIDI_ENABLE=yes in rules.mk).",
+            "// Advanced MIDI support (paired with MIDI_ENABLE=yes in rules.mk).",
+        )
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        print("Migrated config.h MIDI_BASIC -> MIDI_ADVANCED")
+        return
+
+    if re.search(r"^\s*#define\s+MIDI_ADVANCED\b", content, flags=re.MULTILINE):
+        print("config.h already defines MIDI_ADVANCED; skipping.")
+        return
+
+    addition = "\n// Advanced MIDI support (paired with MIDI_ENABLE=yes in rules.mk).\n#define MIDI_ADVANCED\n"
+    if not content.endswith("\n"):
+        content += "\n"
+    content += addition
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    print("Injected #define MIDI_ADVANCED into config.h")
+
+
+def patch_rules_mk_midi(layout_dir: str) -> None:
+    """
+    Ensure MIDI_ENABLE = yes in rules.mk. Replace any existing MIDI_ENABLE line
+    (regardless of its value) or append one if missing.
+    """
+    rules_path = os.path.join(layout_dir, "rules.mk")
+    if not os.path.exists(rules_path):
+        print(f"Warning: {rules_path} not found; cannot enable MIDI.")
+        return
+
+    with open(rules_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    midi_line_pat = re.compile(r"^\s*MIDI_ENABLE\s*=.*$", flags=re.MULTILINE)
+    if midi_line_pat.search(content):
+        new_content = midi_line_pat.sub("MIDI_ENABLE = yes", content, count=1)
+        if new_content != content:
+            with open(rules_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            print("Set existing MIDI_ENABLE line to yes in rules.mk")
+        else:
+            print("MIDI_ENABLE already set to yes in rules.mk")
+        return
+
+    if not content.endswith("\n"):
+        content += "\n"
+    content += "MIDI_ENABLE = yes\n"
+    with open(rules_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    print("Appended MIDI_ENABLE = yes to rules.mk")
+
+
 def patch_keymap(layout_dir: str) -> None:
     keymap_path = os.path.join(layout_dir, "keymap.c")
     if not os.path.exists(keymap_path):
@@ -858,6 +1205,20 @@ def patch_keymap(layout_dir: str) -> None:
     # else:
     #     print("Keeping Oryx per-key tapping terms unchanged.")
 
+    # 8.5) MIDI injection: declare custom bass-shift keycodes (top of file) and
+    # overwrite the layer-2 placeholders with real MIDI keycodes.
+    content, midi_enum_injected = _inject_midi_keycode_enum(content)
+    if midi_enum_injected:
+        print("Injected MIDI custom-keycode enum near top of keymap.c")
+    else:
+        print("Warning: Could not inject MIDI custom-keycode enum.")
+
+    content, midi_layer_injected = _inject_midi_layer(content)
+    if midi_layer_injected:
+        print(f"Overwrote layer {MIDI_LAYER_INDEX} with MIDI keycodes")
+    else:
+        print(f"Warning: Could not find layer {MIDI_LAYER_INDEX} to inject MIDI keycodes.")
+
     # 9) Hook process_record_user
     wrapper_marker = "INJECTED BY ORYX-CUSTOM-MOONLANDER WORKFLOW"
     if wrapper_marker in content and '#include "custom_code.c"' in content:
@@ -892,6 +1253,10 @@ def patch_keymap(layout_dir: str) -> None:
         f.write(content)
 
     print("Successfully patched keymap.c")
+
+    # 10) Enable MIDI in the build (config.h + rules.mk).
+    patch_config_h_midi(layout_dir)
+    patch_rules_mk_midi(layout_dir)
 
 
 if __name__ == "__main__":

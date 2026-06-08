@@ -5,10 +5,45 @@
 #ifdef RAW_ENABLE
 #include "raw_hid.h"
 #endif
+#ifdef MIDI_ENABLE
+// process_midi() (declared here under MIDI_ADVANCED) decodes MIDI note keycodes
+// by value and drives the real MIDI device, including note-on/off tracking.
+#include "process_midi.h"
+#endif
 
+// When MIDI is enabled, patch_keymap.py injects `enum user_custom_keycodes`
+// (with MIDI_BASS_SHIFT_UP / MIDI_BASS_SHIFT_DOWN) near the TOP of keymap.c so
+// the MIDI layer can reference those keycodes before keymaps[] is defined.
+// This file is #included at the BOTTOM of keymap.c, so to avoid redefining the
+// enum we only declare our own custom keycodes here when MIDI is NOT enabled.
+#ifndef MIDI_ENABLE
 enum user_custom_keycodes {
     MY_CUSTOM_MACRO = SAFE_RANGE,
 };
+#endif  // !MIDI_ENABLE
+
+#ifdef MIDI_ADVANCED
+// Bass octave/transpose state. Each tap of the thumb shifters moves ALL bass
+// notes by +/- 1 semitone (free transpose across octaves), clamped to a sane
+// range so the host never receives out-of-range MIDI note numbers.
+//
+// IMPORTANT: this requires MIDI_ADVANCED (not MIDI_BASIC). Only MIDI_ADVANCED
+// exposes process_midi(), which decodes note keycodes by value. We forward a
+// transposed note keycode to process_midi() so QMK's MIDI device handles the
+// actual note-on/off (and its own per-tone tracking). State is gated on
+// MIDI_ADVANCED to match its only use site (avoids unused-variable warnings).
+#define MIDI_BASS_SHIFT_MIN (-24)
+#define MIDI_BASS_SHIFT_MAX (24)
+static int8_t bass_shift_offset = 0;
+
+// Per-key snapshot of the note keycode that was actually sounded on press, so
+// the matching release forwards the SAME shifted keycode even if the offset
+// changed mid-hold. Keyed by physical matrix position. This prevents stuck
+// notes: process_midi() tracks note-on/off by keycode, so press and release
+// must use identical keycodes.
+static uint16_t bass_active_note[MATRIX_ROWS][MATRIX_COLS];
+static bool bass_active[MATRIX_ROWS][MATRIX_COLS];
+#endif  // MIDI_ADVANCED
 
 static bool language_is_hebrew = false;
 // The language tap-dance key is on matrix [4,0] in this Moonlander layout.
@@ -100,6 +135,53 @@ void custom_language_rgb_indicator(void) {
 }
 
 bool process_record_user_custom(uint16_t keycode, keyrecord_t *record) {
+#ifdef MIDI_ADVANCED
+    // --- Bass thumb shifters: transpose ALL bass notes by +/- 1 semitone. ---
+    if (keycode == MIDI_BASS_SHIFT_UP) {
+        if (record->event.pressed && bass_shift_offset < MIDI_BASS_SHIFT_MAX) {
+            bass_shift_offset++;
+        }
+        return false;
+    }
+    if (keycode == MIDI_BASS_SHIFT_DOWN) {
+        if (record->event.pressed && bass_shift_offset > MIDI_BASS_SHIFT_MIN) {
+            bass_shift_offset--;
+        }
+        return false;
+    }
+
+    // --- Bass notes: intercept by KEYCODE RANGE (octave-2), not matrix row. ---
+    // Bass keys carry MI_C2..MI_B2 (a contiguous 12-value range; we populate 11).
+    // Melody keys are MI_C3..MI_B4, a higher range that is never intercepted.
+    //
+    // We forward a TRANSPOSED note keycode to process_midi(), which decodes the
+    // note by value and emits the real MIDI note-on/off. We reuse the incoming
+    // `record` so the pressed/released state matches; only the keycode changes.
+    if (keycode >= MI_C2 && keycode <= MI_B2) {
+        uint8_t row = record->event.key.row;
+        uint8_t col = record->event.key.col;
+        uint16_t shifted;
+        if (record->event.pressed) {
+            shifted = (uint16_t)((int16_t)keycode + bass_shift_offset);
+            if (row < MATRIX_ROWS && col < MATRIX_COLS) {
+                bass_active_note[row][col] = shifted;
+                bass_active[row][col] = true;
+            }
+        } else {
+            if (row < MATRIX_ROWS && col < MATRIX_COLS && bass_active[row][col]) {
+                // Use the snapshot so a mid-hold offset change cannot strand a note.
+                shifted = bass_active_note[row][col];
+                bass_active[row][col] = false;
+            } else {
+                shifted = (uint16_t)((int16_t)keycode + bass_shift_offset);
+            }
+        }
+        // Hand the transposed note to QMK's MIDI handler (advanced MIDI).
+        process_midi(shifted, record);
+        return false;
+    }
+#endif  // MIDI_ADVANCED
+
     if (!record->event.pressed) {
         return true;
     }
