@@ -1100,60 +1100,84 @@ def _build_midi_layer_body(original_args: list[str] | None = None) -> str:
     """
     Construct the LAYOUT_moonlander(...) argument list for the MIDI layer.
 
-    If ``original_args`` (the flat 72-arg list parsed from the Oryx-generated
-    layer 2) is provided, the k45 "big red thumb" position is preserved from it
-    so a user-configured "back to layer 0" key survives the overwrite.
+    Only the MIDI-note positions and the two bass-shifter keys are overwritten.
+    Every other position is preserved from the user's Oryx-generated layer 2 so
+    that custom keys (RGB toggles, layer-toggles, etc.) survive the patch.
 
-    Layout (confirmed in the plan / against the Oryx screenshot):
-      Row 0 (k00..k0d): disabled top row (KC_NO x14)
-      Row 1 (k10..k1d): sharps, biased right
-      Row 2 (k20..k2d): naturals C3..B3 (left) / C4..B4 (right)
-      Row 3 (k30..k3b): bass C2..F2 (left BASS1-6) / KC_NO x6 (right)
-      Row 4 (k40..k4b): bass G2..B2 (left BASS7-11) + KC_NO,
-                        then KC_NO (was LSFT(KC_ENTER) at k46) + KC_NO x5
-      Row 5 (k50..k55): KC_NO, MIDI_BASS_SHIFT_UP (k51), MIDI_BASS_SHIFT_DOWN (k52),
-                        KC_TRANSPARENT x3 (right thumb, unused on this layer)
+    Positions that are ALWAYS overwritten by the MIDI injection:
+      Row 1 – sharps:  k11=MI_Cs3, k12=MI_Ds3, k14=MI_Fs3, k15=MI_Gs3, k16=MI_As3,
+                       k18=MI_Db4, k19=MI_Eb4, k21=MI_Gb4, k22=MI_Ab4, k23=MI_Bb4
+      Row 2 – naturals: k20..k2d  (MI_C3..MI_B3 / MI_C4..MI_B4)
+      Row 3 – bass:     k30..k35  (MI_C2..MI_F2)
+      Row 4 – bass:     k40..k44  (MI_G2..MI_B2)
+      Row 5 – shifters: k51=MIDI_BASS_SHIFT_UP, k52=MIDI_BASS_SHIFT_DOWN
 
-    Note: enharmonic flat aliases (MI_Db4 etc.) keep the right-hand sharp labels
-    matching the Oryx legends.
+    All other positions come from ``original_args`` (the flat 72-arg list parsed
+    from the Oryx-generated layer 2).  If ``original_args`` is missing or not
+    72 entries long we fall back to KC_NO / KC_TRANSPARENT placeholders.
     """
-    rows = [
-        # Row 0: disabled top row
-        ["KC_NO"] * 14,
-        # Row 1: sharps (biased right; gaps stay KC_NO)
-        ["KC_NO", "MI_Cs3", "MI_Ds3", "KC_NO", "MI_Fs3", "MI_Gs3", "MI_As3",
-         "KC_NO", "MI_Db4", "MI_Eb4", "KC_NO", "MI_Gb4", "MI_Ab4", "MI_Bb4"],
-        # Row 2: naturals C3..B3 (left) / C4..B4 (right)
-        ["MI_C3", "MI_D3", "MI_E3", "MI_F3", "MI_G3", "MI_A3", "MI_B3",
-         "MI_C4", "MI_D4", "MI_E4", "MI_F4", "MI_G4", "MI_A4", "MI_B4"],
-        # Row 3: bass BASS1-6 (C2..F2) left, right disabled
-        ["MI_C2", "MI_Cs2", "MI_D2", "MI_Ds2", "MI_E2", "MI_F2",
-         "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO"],
-        # Row 4: bass BASS7-11 (G2..B2) + k45 = the big red left thumb key (its
-        # Oryx keycode is preserved below so the user's "back to layer 0" key
-        # survives); k46 (right-hand stray LSFT(KC_ENTER)) neutralized to KC_NO.
-        ["MI_G2", "MI_Gs2", "MI_A2", "MI_As2", "MI_B2", "KC45_PRESERVE",
-         "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO"],
-        # Row 5: thumb cluster. Purple-lit left thumbs k51/k52 = shifters.
-        ["KC_NO", "MIDI_BASS_SHIFT_UP", "MIDI_BASS_SHIFT_DOWN",
-         "KC_TRANSPARENT", "KC_TRANSPARENT", "KC_TRANSPARENT"],
-    ]
+    # Indices (flat 0-based) of positions that MUST be overwritten with MIDI notes.
+    MIDI_NOTE_INDICES = set()
+    # Row 1 sharps
+    for i in [15, 16, 18, 19, 20, 22, 23, 25, 26, 27]:
+        MIDI_NOTE_INDICES.add(i)
+    # Row 2 naturals (all 14)
+    for i in range(28, 42):
+        MIDI_NOTE_INDICES.add(i)
+    # Row 3 bass left (first 6)
+    for i in range(42, 48):
+        MIDI_NOTE_INDICES.add(i)
+    # Row 4 bass left (first 5)
+    for i in range(54, 59):
+        MIDI_NOTE_INDICES.add(i)
+    # Row 5 shifters
+    MIDI_NOTE_INDICES.add(67)   # k51 = MIDI_BASS_SHIFT_UP
+    MIDI_NOTE_INDICES.add(68)   # k52 = MIDI_BASS_SHIFT_DOWN
 
-    # k45 (the big red left thumb key) is the 6th key of row 4 -> flat index 59.
-    # Preserve whatever the user mapped there in Oryx (e.g. TO(0) to leave the
-    # MIDI layer). Fall back to KC_TRANSPARENT only if we cannot read it.
-    K45_FLAT_INDEX = 59
-    preserved_k45 = "KC_TRANSPARENT"
-    if original_args is not None and len(original_args) > K45_FLAT_INDEX:
-        candidate = original_args[K45_FLAT_INDEX].strip()
-        if candidate:
-            preserved_k45 = candidate
+    # Build the default fallback (what we'd inject if no Oryx source available).
+    DEFAULTS = ["KC_NO"] * 72
+    # Row 1 sharps
+    sharp_map = {15:"MI_Cs3",16:"MI_Ds3",18:"MI_Fs3",19:"MI_Gs3",20:"MI_As3",
+                 22:"MI_Db4",23:"MI_Eb4",25:"MI_Gb4",26:"MI_Ab4",27:"MI_Bb4"}
+    for idx, kc in sharp_map.items():
+        DEFAULTS[idx] = kc
+    # Row 2 naturals
+    naturals_left  = ["MI_C3","MI_D3","MI_E3","MI_F3","MI_G3","MI_A3","MI_B3"]
+    naturals_right = ["MI_C4","MI_D4","MI_E4","MI_F4","MI_G4","MI_A4","MI_B4"]
+    for i, kc in enumerate(naturals_left):
+        DEFAULTS[28 + i] = kc
+    for i, kc in enumerate(naturals_right):
+        DEFAULTS[35 + i] = kc
+    # Row 3 bass
+    bass_row3 = ["MI_C2","MI_Cs2","MI_D2","MI_Ds2","MI_E2","MI_F2"]
+    for i, kc in enumerate(bass_row3):
+        DEFAULTS[42 + i] = kc
+    # Row 4 bass
+    bass_row4 = ["MI_G2","MI_Gs2","MI_A2","MI_As2","MI_B2"]
+    for i, kc in enumerate(bass_row4):
+        DEFAULTS[54 + i] = kc
+    # Row 5 shifters
+    DEFAULTS[67] = "MIDI_BASS_SHIFT_UP"
+    DEFAULTS[68] = "MIDI_BASS_SHIFT_DOWN"
 
+    # Start from defaults, then overlay preserved Oryx keys for non-MIDI positions.
+    result = list(DEFAULTS)
+    if original_args is not None and len(original_args) == 72:
+        for i in range(72):
+            if i not in MIDI_NOTE_INDICES:
+                val = original_args[i].strip()
+                if val:
+                    result[i] = val
+
+    # Format into rows matching LAYOUT_moonlander arg order.
+    row_sizes = [14, 14, 14, 12, 12, 6]
     lines = []
-    for row in rows:
-        rendered = [preserved_k45 if tok == "KC45_PRESERVE" else tok for tok in row]
-        lines.append("    " + ", ".join(rendered) + ",")
-    # Drop the trailing comma on the very last argument.
+    offset = 0
+    for size in row_sizes:
+        chunk = result[offset : offset + size]
+        lines.append("    " + ", ".join(chunk) + ",")
+        offset += size
+
     body = "\n".join(lines)
     body = body.rstrip()
     if body.endswith(","):
