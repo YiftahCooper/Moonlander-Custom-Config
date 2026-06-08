@@ -954,8 +954,9 @@ def _build_midi_layer_body() -> str:
         # Row 3: bass BASS1-6 (C2..F2) left, right disabled
         ["MI_C2", "MI_Cs2", "MI_D2", "MI_Ds2", "MI_E2", "MI_F2",
          "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO"],
-        # Row 4: bass BASS7-11 (G2..B2) + disabled extra; k46 neutralized
-        ["MI_G2", "MI_Gs2", "MI_A2", "MI_As2", "MI_B2", "KC_NO",
+        # Row 4: bass BASS7-11 (G2..B2) + k45 preserved (big red thumb key, user-configured in Oryx);
+        # k46 (right-hand stray LSFT(KC_ENTER)) neutralized to KC_NO.
+        ["MI_G2", "MI_Gs2", "MI_A2", "MI_As2", "MI_B2", "KC_TRANSPARENT",
          "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO"],
         # Row 5: thumb cluster. Purple-lit left thumbs k51/k52 = shifters.
         ["KC_NO", "MIDI_BASS_SHIFT_UP", "MIDI_BASS_SHIFT_DOWN",
