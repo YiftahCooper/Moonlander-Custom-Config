@@ -9,13 +9,6 @@
 // process_midi() (declared here under MIDI_ADVANCED) decodes MIDI note keycodes
 // by value and drives the real MIDI device, including note-on/off tracking.
 #include "process_midi.h"
-
-// Fix: QMK's default MIDI octave (4, corresponding to MI_OC2) makes MI_C2 sound
-// as C5 instead of C2. Set octave=1 so keycode octaves match sounding octaves:
-// MI_C2 -> C2, MI_C3 -> C3, MI_C4 -> C4, etc.
-void keyboard_post_init_user(void) {
-    midi_config.octave = 1;
-}
 #endif
 
 // When MIDI is enabled, patch_keymap.py injects `enum user_custom_keycodes`
