@@ -106,6 +106,13 @@ void custom_language_resync(void) {
 
 void custom_language_rgb_indicator(void) {
 #ifdef RGB_MATRIX_ENABLE
+    // Bug 5: only drive the language indicator color on the BASE layer (0).
+    // On other layers (e.g. the MIDI layer 2, where this physical key is a bass
+    // key) the Oryx-configured per-layer color must win, so we do nothing.
+    if (get_highest_layer(layer_state) != 0) {
+        return;
+    }
+
     uint8_t r = 0;
     uint8_t g = 0;
     uint8_t b = 0;

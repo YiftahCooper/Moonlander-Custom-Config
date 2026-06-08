@@ -14,6 +14,8 @@ LANGUAGE_RGB_MARKER = "ORYX_LANG_RGB_PATCH"
 LANGUAGE_HOLD_PREF_MARKER = "ORYX_LANG_HOLD_PREF_PATCH"
 LANGUAGE_ON_DANCE_NOOP_MARKER = "ORYX_LANG_ON_DANCE_NOOP_PATCH"
 LANGUAGE_TAP_TERM_MARKER = "ORYX_LANG_TAP_TERM_PATCH"
+LANGUAGE_F18_HOLD_MARKER = "ORYX_LANG_F18_HOLD_PREF_PATCH"
+LANGUAGE_F18_DOUBLETAP_MARKER = "ORYX_LANG_F18_DOUBLETAP_PATCH"
 TAPHOLD_COMPAT_MARKER = "ORYX_TAPHOLD_FALLBACK_PATCH"
 DOUBLETAP_COMPAT_MARKER = "ORYX_DOUBLETAP_FALLBACK_PATCH"
 SPACESHIFT_HOLD_PREF_MARKER = "ORYX_SPACESHIFT_HOLD_PREF_PATCH"
@@ -835,6 +837,116 @@ def _relax_aggressive_tapping_terms(content: str) -> tuple[str, int]:
     return _replace_function_body(content, "get_tapping_term", body_new), changes
 
 
+def _patch_f18_language_dance(content: str) -> tuple[str, bool]:
+    """
+    Fix the F18-based language tap-dance (Bug 3) WITHOUT switching to the
+    LALT(KC_LEFT_SHIFT) firmware mechanism (language switching is owned by the
+    Windhawk host bridge via F18).
+
+    The Oryx-generated language dance maps:
+        SINGLE_TAP        -> KC_F18   (Windhawk: switch language)
+        SINGLE_HOLD       -> KC_LEFT_CTRL
+        DOUBLE_TAP        -> KC_F22   (wrong-language fixer -- NOT what the user wants)
+        DOUBLE_SINGLE_TAP -> KC_F22
+
+    Two problems are fixed here:
+      1) Hold did not feel like a normal mod-tap. With HOLD_ON_OTHER_KEY_PRESS,
+         pressing another key while holding interrupts the dance, and the stock
+         dance_step() returns SINGLE_TAP -> it fired F18 instead of Ctrl. We force
+         an interrupted single press to resolve to SINGLE_HOLD (Ctrl), matching
+         every normal mod-tap key on the board.
+      2) Double-tap fired the transliteration fixer (F22). The user expects a
+         double tap to switch language, so we remap DOUBLE_TAP / DOUBLE_SINGLE_TAP
+         to KC_F18 as well (a second language switch).
+
+    Detection: the language dance is the one whose *_finished body taps/registers
+    KC_F18 in its SINGLE_TAP case.
+    """
+    dance_indices = _discover_dance_indices(content)
+    patched_any = False
+
+    for idx in dance_indices:
+        finished_name = f"dance_{idx}_finished"
+        reset_name = f"dance_{idx}_reset"
+
+        finished_body, has_finished = _get_function_body(content, finished_name)
+        if not has_finished:
+            continue
+
+        # Identify the language dance by its F18 single-tap signature.
+        if "KC_F18" not in finished_body:
+            continue
+        if "SINGLE_TAP" not in finished_body:
+            continue
+
+        finished_new = finished_body
+
+        # (1) Hold preference: interrupted single press -> SINGLE_HOLD (Ctrl).
+        if LANGUAGE_F18_HOLD_MARKER not in finished_new:
+            step_assign_pat = re.compile(
+                rf"dance_state\s*\[\s*{idx}\s*\]\.step\s*=\s*dance_step\s*\(\s*state\s*\)\s*;"
+            )
+            step_replacement = (
+                "if (state->count == 1 && state->interrupted) {\n"
+                f"        dance_state[{idx}].step = SINGLE_HOLD; /* {LANGUAGE_F18_HOLD_MARKER} */\n"
+                "    } else {\n"
+                f"        dance_state[{idx}].step = dance_step(state);\n"
+                "    }"
+            )
+            finished_new, n = step_assign_pat.subn(step_replacement, finished_new, count=1)
+            if n:
+                patched_any = True
+
+        # (2) Double tap -> language switch (F18), not the F22 fixer.
+        finished_new, dt = _replace_case_block(
+            finished_new,
+            "DOUBLE_TAP",
+            lambda indent: (
+                f"{indent}case DOUBLE_TAP: register_code16(KC_F18); "
+                f"break; /* {LANGUAGE_F18_DOUBLETAP_MARKER} */"
+            ),
+        )
+        finished_new, dst = _replace_case_block(
+            finished_new,
+            "DOUBLE_SINGLE_TAP",
+            lambda indent: (
+                f"{indent}case DOUBLE_SINGLE_TAP: register_code16(KC_F18); "
+                f"break; /* {LANGUAGE_F18_DOUBLETAP_MARKER} */"
+            ),
+        )
+        if dt or dst:
+            patched_any = True
+
+        content = _replace_function_body(content, finished_name, finished_new)
+
+        # Mirror the keycode change in the matching reset handler (unregister F18).
+        reset_body, has_reset = _get_function_body(content, reset_name)
+        if has_reset:
+            reset_new = reset_body
+            reset_new, _ = _replace_case_block(
+                reset_new,
+                "DOUBLE_TAP",
+                lambda indent: (
+                    f"{indent}case DOUBLE_TAP: unregister_code16(KC_F18); "
+                    f"break; /* {LANGUAGE_F18_DOUBLETAP_MARKER} */"
+                ),
+            )
+            reset_new, _ = _replace_case_block(
+                reset_new,
+                "DOUBLE_SINGLE_TAP",
+                lambda indent: (
+                    f"{indent}case DOUBLE_SINGLE_TAP: unregister_code16(KC_F18); "
+                    f"break; /* {LANGUAGE_F18_DOUBLETAP_MARKER} */"
+                ),
+            )
+            content = _replace_function_body(content, reset_name, reset_new)
+
+        # Only one language dance exists; stop after patching it.
+        return content, patched_any
+
+    return content, patched_any
+
+
 def _find_oryx_keycode_enum_base(content: str) -> str:
     """
     Determine the keycode value our custom enum must start at so it does NOT
@@ -925,9 +1037,44 @@ def _inject_midi_keycode_enum(content: str) -> tuple[str, bool]:
     return content, False
 
 
-def _build_midi_layer_body() -> str:
+def _split_top_level_args(arg_text: str) -> list[str]:
+    """
+    Split a LAYOUT_moonlander(...) argument list on top-level commas only,
+    keeping nested parens intact (e.g. MT(MOD_RALT, KC_TAB), LT(9, KC_F23)).
+    Comments are stripped first.
+    """
+    # Strip block and line comments.
+    arg_text = re.sub(r"/\*.*?\*/", "", arg_text, flags=re.DOTALL)
+    arg_text = re.sub(r"//[^\n]*", "", arg_text)
+
+    args = []
+    depth = 0
+    current = []
+    for ch in arg_text:
+        if ch == "(":
+            depth += 1
+            current.append(ch)
+        elif ch == ")":
+            depth -= 1
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            args.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+    tail = "".join(current).strip()
+    if tail:
+        args.append(tail)
+    return args
+
+
+def _build_midi_layer_body(original_args: list[str] | None = None) -> str:
     """
     Construct the LAYOUT_moonlander(...) argument list for the MIDI layer.
+
+    If ``original_args`` (the flat 72-arg list parsed from the Oryx-generated
+    layer 2) is provided, the k45 "big red thumb" position is preserved from it
+    so a user-configured "back to layer 0" key survives the overwrite.
 
     Layout (confirmed in the plan / against the Oryx screenshot):
       Row 0 (k00..k0d): disabled top row (KC_NO x14)
@@ -954,18 +1101,30 @@ def _build_midi_layer_body() -> str:
         # Row 3: bass BASS1-6 (C2..F2) left, right disabled
         ["MI_C2", "MI_Cs2", "MI_D2", "MI_Ds2", "MI_E2", "MI_F2",
          "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO"],
-        # Row 4: bass BASS7-11 (G2..B2) + k45 preserved (big red thumb key, user-configured in Oryx);
-        # k46 (right-hand stray LSFT(KC_ENTER)) neutralized to KC_NO.
-        ["MI_G2", "MI_Gs2", "MI_A2", "MI_As2", "MI_B2", "KC_TRANSPARENT",
+        # Row 4: bass BASS7-11 (G2..B2) + k45 = the big red left thumb key (its
+        # Oryx keycode is preserved below so the user's "back to layer 0" key
+        # survives); k46 (right-hand stray LSFT(KC_ENTER)) neutralized to KC_NO.
+        ["MI_G2", "MI_Gs2", "MI_A2", "MI_As2", "MI_B2", "KC45_PRESERVE",
          "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO", "KC_NO"],
         # Row 5: thumb cluster. Purple-lit left thumbs k51/k52 = shifters.
         ["KC_NO", "MIDI_BASS_SHIFT_UP", "MIDI_BASS_SHIFT_DOWN",
          "KC_TRANSPARENT", "KC_TRANSPARENT", "KC_TRANSPARENT"],
     ]
 
+    # k45 (the big red left thumb key) is the 6th key of row 4 -> flat index 59.
+    # Preserve whatever the user mapped there in Oryx (e.g. TO(0) to leave the
+    # MIDI layer). Fall back to KC_TRANSPARENT only if we cannot read it.
+    K45_FLAT_INDEX = 59
+    preserved_k45 = "KC_TRANSPARENT"
+    if original_args is not None and len(original_args) > K45_FLAT_INDEX:
+        candidate = original_args[K45_FLAT_INDEX].strip()
+        if candidate:
+            preserved_k45 = candidate
+
     lines = []
     for row in rows:
-        lines.append("    " + ", ".join(row) + ",")
+        rendered = [preserved_k45 if tok == "KC45_PRESERVE" else tok for tok in row]
+        lines.append("    " + ", ".join(rendered) + ",")
     # Drop the trailing comma on the very last argument.
     body = "\n".join(lines)
     body = body.rstrip()
@@ -1000,7 +1159,12 @@ def _inject_midi_layer(content: str) -> tuple[str, bool]:
     if close_paren_idx == -1:
         return content, False
 
-    new_body = _build_midi_layer_body()
+    # Parse the original (Oryx) layer-2 argument list so we can preserve specific
+    # user-configured keys (e.g. the big red thumb "back to layer 0" key at k45).
+    inner = content[open_paren_idx + 1 : close_paren_idx]
+    original_args = _split_top_level_args(inner)
+
+    new_body = _build_midi_layer_body(original_args if len(original_args) == 72 else None)
     marker = f"  /* {MIDI_LAYER_MARKER} */"
     replacement = (
         content[: open_paren_idx + 1]
@@ -1155,6 +1319,13 @@ def patch_keymap(layout_dir: str) -> None:
             print("Warning: rgb_matrix_indicators_user not found; language RGB indicator hook not applied.")
     else:
         print("Skipping language RGB indicator hook patching (Oryx-managed language behavior).")
+
+    # 4b) Fix the F18-based language dance hold feel + double-tap (Bug 3).
+    content, f18_lang_patched = _patch_f18_language_dance(content)
+    if f18_lang_patched:
+        print("Patched F18 language dance: hold-preference (Ctrl) + double-tap language switch")
+    else:
+        print("No F18 language dance found to patch (skipping).")
 
     # 5) For the SPACE/SHIFT dance, prefer hold when interrupted by another key.
     content, spaceshift_hold_pref_patched = _prefer_hold_for_space_shift_dance(content, dance_indices)

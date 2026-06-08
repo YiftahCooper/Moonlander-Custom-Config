@@ -142,14 +142,16 @@ static const std::unordered_map<wchar_t, wchar_t> kEnglishToHebrew = {
     {'n', L'\u05DE'}, {'m', L'\u05E6'}
 };
 
-// Hebrew -> English mapping (reverse of above)
+// Hebrew -> English mapping (reverse of above).
+// English values are LOWERCASE: Hebrew has no case, so transcribing to English
+// should default to lowercase (the user can then use the F19 case cycler).
 static const std::unordered_map<wchar_t, wchar_t> kHebrewToEnglish = {
-    {L'/', 'Q'}, {L'\'', 'W'}, {L'\u05E7', 'E'}, {L'\u05E8', 'R'}, {L'\u05D0', 'T'}, {L'\u05D8', 'Y'},
-    {L'\u05D5', 'U'}, {L'\u05DF', 'I'}, {L'\u05DD', 'O'}, {L'\u05E4', 'P'}, {L'}', '['}, {L'{', ']'}, {L'|', '\\'},
-    {L'\u05E9', 'A'}, {L'\u05D3', 'S'}, {L'\u05D2', 'D'}, {L'\u05DB', 'F'}, {L'\u05E2', 'G'}, {L'\u05D9', 'H'},
-    {L'\u05D7', 'J'}, {L'\u05DC', 'K'}, {L'\u05DA', 'L'}, {L'\u05E3', ';'}, {L',', '\''},
-    {L'\u05D6', 'Z'}, {L'\u05E1', 'X'}, {L'\u05D1', 'C'}, {L'\u05D4', 'V'}, {L'\u05E0', 'B'},
-    {L'\u05DE', 'N'}, {L'\u05E6', 'M'}, {L'\u05EA', ','}, {L'\u05E5', '.'}, {L'.', '/'}
+    {L'/', 'q'}, {L'\'', 'w'}, {L'\u05E7', 'e'}, {L'\u05E8', 'r'}, {L'\u05D0', 't'}, {L'\u05D8', 'y'},
+    {L'\u05D5', 'u'}, {L'\u05DF', 'i'}, {L'\u05DD', 'o'}, {L'\u05E4', 'p'}, {L'}', '['}, {L'{', ']'}, {L'|', '\\'},
+    {L'\u05E9', 'a'}, {L'\u05D3', 's'}, {L'\u05D2', 'd'}, {L'\u05DB', 'f'}, {L'\u05E2', 'g'}, {L'\u05D9', 'h'},
+    {L'\u05D7', 'j'}, {L'\u05DC', 'k'}, {L'\u05DA', 'l'}, {L'\u05E3', ';'}, {L',', '\''},
+    {L'\u05D6', 'z'}, {L'\u05E1', 'x'}, {L'\u05D1', 'c'}, {L'\u05D4', 'v'}, {L'\u05E0', 'b'},
+    {L'\u05DE', 'n'}, {L'\u05E6', 'm'}, {L'\u05EA', ','}, {L'\u05E5', '.'}, {L'.', '/'}
 };
 
 // Clipboard helpers
@@ -229,6 +231,25 @@ void send_ctrl_v() {
     send_key_event('V', false);
     send_key_event(VK_LCONTROL, false);
     Sleep(kClipboardDelayMs);
+    g_is_synthesizing = false;
+}
+
+// After a paste, the selection is lost and the caret sits at the end of the
+// pasted text. Re-select the pasted run by holding Shift and pressing Left
+// `count` times. This keeps the text highlighted so the user can trigger the
+// transform again (e.g. cycle case repeatedly) without re-selecting manually.
+void reselect_after_paste(size_t count) {
+    if (count == 0) {
+        return;
+    }
+    g_is_synthesizing = true;
+    clear_held_modifiers();
+    send_key_event(VK_LSHIFT, true);
+    for (size_t i = 0; i < count; i++) {
+        send_key_event(VK_LEFT, true);
+        send_key_event(VK_LEFT, false);
+    }
+    send_key_event(VK_LSHIFT, false);
     g_is_synthesizing = false;
 }
 
@@ -362,6 +383,7 @@ void fix_wrong_language_clipboard() {
     if (transformed != text) {
         if (set_clipboard_text(transformed)) {
             send_ctrl_v();
+            reselect_after_paste(transformed.size());
             if (g_settings.debug_logging) {
                 Wh_Log(L"F22: Flipped %zu characters", transformed.size());
             }
@@ -386,6 +408,7 @@ void cycle_case_clipboard() {
     if (transformed != text) {
         if (set_clipboard_text(transformed)) {
             send_ctrl_v();
+            reselect_after_paste(transformed.size());
             if (g_settings.debug_logging) {
                 Wh_Log(L"F19: Cycled case");
             }

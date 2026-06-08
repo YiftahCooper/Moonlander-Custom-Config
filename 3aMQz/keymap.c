@@ -86,7 +86,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     KC_NO, MI_Cs3, MI_Ds3, KC_NO, MI_Fs3, MI_Gs3, MI_As3, KC_NO, MI_Db4, MI_Eb4, KC_NO, MI_Gb4, MI_Ab4, MI_Bb4,
     MI_C3, MI_D3, MI_E3, MI_F3, MI_G3, MI_A3, MI_B3, MI_C4, MI_D4, MI_E4, MI_F4, MI_G4, MI_A4, MI_B4,
     MI_C2, MI_Cs2, MI_D2, MI_Ds2, MI_E2, MI_F2, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO,
-    MI_G2, MI_Gs2, MI_A2, MI_As2, MI_B2, KC_TRANSPARENT, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO,
+    MI_G2, MI_Gs2, MI_A2, MI_As2, MI_B2, TO(0), KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO,
     KC_NO, MIDI_BASS_SHIFT_UP, MIDI_BASS_SHIFT_DOWN, KC_TRANSPARENT, KC_TRANSPARENT, KC_TRANSPARENT
   ),
   [3] = LAYOUT_moonlander(
@@ -271,12 +271,16 @@ void on_dance_0(tap_dance_state_t *state, void *user_data) {
 }
 
 void dance_0_finished(tap_dance_state_t *state, void *user_data) {
-    dance_state[0].step = dance_step(state);
+    if (state->count == 1 && state->interrupted) {
+        dance_state[0].step = SINGLE_HOLD; /* ORYX_LANG_F18_HOLD_PREF_PATCH */
+    } else {
+        dance_state[0].step = dance_step(state);
+    }
     switch (dance_state[0].step) {
         case SINGLE_TAP: register_code16(KC_F18); break;
         case SINGLE_HOLD: register_code16(KC_LEFT_CTRL); break;
-        case DOUBLE_TAP: register_code16(KC_F22); break;
-        case DOUBLE_SINGLE_TAP: register_code16(KC_F22); break; /* ORYX_DOUBLETAP_FALLBACK_PATCH */
+        case DOUBLE_TAP: register_code16(KC_F18); break; /* ORYX_LANG_F18_DOUBLETAP_PATCH */
+        case DOUBLE_SINGLE_TAP: register_code16(KC_F18); break; /* ORYX_LANG_F18_DOUBLETAP_PATCH */
 }
 }
 
@@ -285,8 +289,8 @@ void dance_0_reset(tap_dance_state_t *state, void *user_data) {
     switch (dance_state[0].step) {
         case SINGLE_TAP: unregister_code16(KC_F18); break;
         case SINGLE_HOLD: unregister_code16(KC_LEFT_CTRL); break;
-        case DOUBLE_TAP: unregister_code16(KC_F22); break;
-        case DOUBLE_SINGLE_TAP: unregister_code16(KC_F22); break; /* ORYX_DOUBLETAP_FALLBACK_PATCH */
+        case DOUBLE_TAP: unregister_code16(KC_F18); break; /* ORYX_LANG_F18_DOUBLETAP_PATCH */
+        case DOUBLE_SINGLE_TAP: unregister_code16(KC_F18); break; /* ORYX_LANG_F18_DOUBLETAP_PATCH */
 }
     dance_state[0].step = 0;
 }
