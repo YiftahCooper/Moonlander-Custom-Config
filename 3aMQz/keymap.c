@@ -147,6 +147,10 @@ RGB hsv_to_rgb_with_value(HSV hsv) {
 
 void keyboard_post_init_user(void) {
   rgb_matrix_enable();
+
+#ifdef MIDI_ENABLE
+  midi_config.octave = 1;
+#endif
 }
 
 const uint8_t PROGMEM ledmap[][RGB_MATRIX_LED_COUNT][3] = {

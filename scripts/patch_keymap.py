@@ -990,6 +990,34 @@ def _find_oryx_keycode_enum_base(content: str) -> str:
     return f"({members[-1]} + 1)"
 
 
+def _patch_keyboard_post_init_midi_octave(content: str) -> tuple[str, bool]:
+    """
+    Inject MIDI octave setting into the existing keyboard_post_init_user function.
+    QMK's default MIDI octave (4) makes MI_C2 sound as C5 instead of C2.
+    Setting octave=1 aligns keycode octaves with sounding octaves.
+    """
+    if "midi_config.octave = 1" in content:
+        return content, True  # Already patched
+
+    # Find the keyboard_post_init_user function
+    func_pattern = r'void\s+keyboard_post_init_user\s*\(\s*void\s*\)\s*\{([^}]*)\}'
+    match = re.search(func_pattern, content)
+    if not match:
+        print("Warning: Could not find keyboard_post_init_user function")
+        return content, False
+
+    # Add MIDI octave setting inside the function
+    original_body = match.group(1)
+    midi_init_code = "\n#ifdef MIDI_ENABLE\n  midi_config.octave = 1;\n#endif\n"
+    new_body = original_body + midi_init_code
+
+    # Replace the function
+    new_func = f"void keyboard_post_init_user(void) {{{new_body}}}"
+    content = content[:match.start()] + new_func + content[match.end():]
+
+    return content, True
+
+
 def _inject_midi_keycode_enum(content: str) -> tuple[str, bool]:
     """
     Inject `enum user_custom_keycodes` near the TOP of keymap.c (after the
@@ -1390,6 +1418,13 @@ def patch_keymap(layout_dir: str) -> None:
         print(f"Overwrote layer {MIDI_LAYER_INDEX} with MIDI keycodes")
     else:
         print(f"Warning: Could not find layer {MIDI_LAYER_INDEX} to inject MIDI keycodes.")
+
+    # 8.6) Patch keyboard_post_init_user to set MIDI octave=1
+    content, midi_octave_patched = _patch_keyboard_post_init_midi_octave(content)
+    if midi_octave_patched:
+        print("Patched keyboard_post_init_user to set MIDI octave=1")
+    else:
+        print("Warning: Could not patch keyboard_post_init_user for MIDI octave.")
 
     # 9) Hook process_record_user
     wrapper_marker = "INJECTED BY ORYX-CUSTOM-MOONLANDER WORKFLOW"
