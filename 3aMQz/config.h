@@ -65,5 +65,7 @@
 #define MIDI_ADVANCED
 
 // Low-latency settings (global). Faster MIDI/typing response; safe for all layers.
-#define DEBOUNCE 1
+#define DEBOUNCE_TYPE sym_eager_pk
+#define DEBOUNCE 5
 #define USB_POLLING_INTERVAL_MS 1
+#define QMK_KEYS_PER_SCAN 12
