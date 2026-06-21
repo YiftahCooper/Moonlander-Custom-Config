@@ -1113,9 +1113,9 @@ def _build_midi_layer_body(original_args: list[str] | None = None) -> str:
       Row 1 – sharps:  k10=C#3, k11=D#3, k13=F#3, k14=G#3, k15=A#3,
                        k17=Db4, k18=Eb4, k1a=Gb4, k1b=Ab4, k1c=Bb4
       Row 2 – naturals: k20..k2d  (MI_C3..MI_B3 / MI_C4..MI_B4)
-      Row 3 – bass:     k30..k35  (MI_C2..MI_F2)
-      Row 4 – bass:     k40..k44  (MI_G2..MI_B2)
-      Row 5 – shifters: k51=MIDI_BASS_SHIFT_UP, k52=MIDI_BASS_SHIFT_DOWN
+      Row 3 – bass:     k30..k35  (MI_C2..MI_F2)  [BASS1–6]
+      Row 4 – bass:     k40..k44  (MI_Fs2..MI_As2)  [BASS7–11, chromatic shift]
+      Row 5 – bass + shifter: k50=MI_B2 [BASS12], k51=BASS_SHIFT_UP, k52=BASS_SHIFT_DOWN
 
     All other positions come from ``original_args`` (the flat 72-arg list parsed
     from the Oryx-generated layer 2).  If ``original_args`` is missing or not
@@ -1135,7 +1135,8 @@ def _build_midi_layer_body(original_args: list[str] | None = None) -> str:
     # Row 4 bass left (first 5)
     for i in range(54, 59):
         MIDI_NOTE_INDICES.add(i)
-    # Row 5 shifters
+    # Row 5 shifters + 12th bass key
+    MIDI_NOTE_INDICES.add(66)   # k50 = BASS12 (MI_B2, left thumb cluster)
     MIDI_NOTE_INDICES.add(67)   # k51 = MIDI_BASS_SHIFT_UP
     MIDI_NOTE_INDICES.add(68)   # k52 = MIDI_BASS_SHIFT_DOWN
 
@@ -1157,11 +1158,12 @@ def _build_midi_layer_body(original_args: list[str] | None = None) -> str:
     bass_row3 = ["MI_C2","MI_Cs2","MI_D2","MI_Ds2","MI_E2","MI_F2"]
     for i, kc in enumerate(bass_row3):
         DEFAULTS[42 + i] = kc
-    # Row 4 bass
-    bass_row4 = ["MI_G2","MI_Gs2","MI_A2","MI_As2","MI_B2"]
+    # Row 4 bass (shifted: F#2..A#2 so B2 fits as the 12th thumb key)
+    bass_row4 = ["MI_Fs2","MI_G2","MI_Gs2","MI_A2","MI_As2"]
     for i, kc in enumerate(bass_row4):
         DEFAULTS[54 + i] = kc
-    # Row 5 shifters
+    # Row 5 shifters + 12th bass key (BASS12 on left thumb cluster)
+    DEFAULTS[66] = "MI_B2"
     DEFAULTS[67] = "MIDI_BASS_SHIFT_UP"
     DEFAULTS[68] = "MIDI_BASS_SHIFT_DOWN"
 

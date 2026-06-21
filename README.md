@@ -56,16 +56,17 @@ Two octaves of polyphonic MIDI input with split melody/bass and a transpose shif
 | Left (octave 3) | `C#3 D#3  F#3 G#3 A#3` |
 | Right (octave 4) | `Db4 Eb4  Gb4 Ab4 Bb4` (enharmonic = `C#4 D#4 F#4 G#4 A#4`) |
 
-**Bass (Rows 3–4, left hand only; F#2 omitted to fit 11 keys):**
+**Bass (Rows 3–4 + thumb cluster, left hand only; full chromatic C2–B2):**
 
 | Row | Keys | Notes |
 |---|---|---|
 | Row 3 (BASS1–6) | k30–k35 | `C2 C#2 D2 D#2 E2 F2` |
-| Row 4 (BASS7–11) | k40–k44 | `G2 G#2 A2 A#2 B2` |
+| Row 4 (BASS7–11) | k40–k44 | `F#2 G2 G#2 A2 A#2` |
+| Row 5 (BASS12) | k50 | `B2` (left thumb cluster, one semitone below BASS1 root) |
 
 #### Bass Shifter (Thumb Cluster)
 
-Two purple-lit left thumb keys: **BASS_up** (k51) and **BASS_down** (k52). Each tap transposes all bass notes ±1 semitone (free transpose across octaves, clamped −24..+24). Melody keys are in a higher keycode range and are never affected.
+Three keys share the left thumb cluster: **BASS12** (k50, the 12th chromatic bass note, B2), **BASS_up** (k51), and **BASS_down** (k52). The two shifter keys each tap to transpose all bass notes ±1 semitone (free transpose across octaves, clamped −24..+24). Melody keys are in a higher keycode range and are never affected.
 
 **Implementation**: The firmware intercepts bass keys by **MIDI keycode range** (`MI_C2..MI_B2`), not by matrix position. On press, the shifter forwards a transposed note keycode to `process_midi()`, which emits the real MIDI note. Each held key snapshots its shifted note keycode so that a shift change mid-hold cannot strand a stuck note.
 
