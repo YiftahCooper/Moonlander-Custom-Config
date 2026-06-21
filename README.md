@@ -2,7 +2,7 @@ Hey! This repo combines a ZSA Moonlander's online Oryx layout with custom QMK fi
 
 Open https://configure.zsa.io/moonlander/layouts/3aMQz/latest/0 to see the base layout — most custom keys have peach-colored labels that mark function-key placeholders which get replaced with real behavior by the patch script after the firmware builds.
 
-The rest of this README is AI-generated technical documentation that explains each feature in depth. Contact me at me@yiftah.com with questions.
+The rest of this README is AI-generated technical documentation that explains each feature in depth. You can contact me at me@yiftah.com with questions or feedback.
 
 # Custom QMK Firmware for ZSA Moonlander
 
