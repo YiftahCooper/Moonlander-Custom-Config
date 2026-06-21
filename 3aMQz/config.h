@@ -6,7 +6,7 @@
 #define NO_AUTO_SHIFT_ALPHA
 #define CAPS_LOCK_STATUS
 #define HOLD_ON_OTHER_KEY_PRESS
-#define SERIAL_NUMBER "3aMQz/JamV3z"
+#define SERIAL_NUMBER "3aMQz/zLQZlO"
 #define LAYER_STATE_8BIT
 
 #define TAPPING_TERM_PER_KEY
@@ -65,7 +65,5 @@
 #define MIDI_ADVANCED
 
 // Low-latency settings (global). Faster MIDI/typing response; safe for all layers.
-#define DEBOUNCE_TYPE sym_eager_pk
-#define DEBOUNCE 5
+#define DEBOUNCE 1
 #define USB_POLLING_INTERVAL_MS 1
-#define QMK_KEYS_PER_SCAN 12
