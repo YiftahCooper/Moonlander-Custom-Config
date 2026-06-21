@@ -20,6 +20,22 @@ This repository provides custom QMK firmware for the ZSA Moonlander keyboard, co
 
 The key innovation: Oryx (ZSA's online layout editor) has no native MIDI support. Instead of manually maintaining merge-conflict-prone `keymap.c` files, this project downloads fresh Oryx source in CI, runs `scripts/patch_keymap.py` to inject custom code, builds via Docker, and publishes `.bin` firmware. **No merge conflicts. Only custom code is tracked.**
 
+## <a id="fkey-ref"></a>F-key Availability Quick Reference
+
+Use this table at a glance when adding a new function:
+
+| F-key | Status | Notes |
+|---|---|---|
+| **F13**, **F14**, **F15**, **F16**, **F17** | **Free** | No standard OS/browser shortcuts |
+| **F20**, **F21**, **F23** | **Free** | No standard OS/browser shortcuts |
+| F1–F12 | Reserved | Layer 1 function row (also all have standard OS/browser shortcuts for refresh, search, fullscreen, etc.) |
+| F18 | Reserved | Language switch — wired to the left-thumb tap-dance key (k40) and Windhawk |
+| F19 | Reserved | Case cycler hotkey — tap of the Shift+Ctrl mod-tap (k52) |
+| F22 | Reserved | Wrong-language fixer hotkey — tap of RCtrl mod-tap (k51) |
+| F24 | Reserved | Period-space shortcut (DUAL_FUNC_3, Layer 3 right-hand dual-function key) |
+
+The 8 free keys above (`F13`–`F17`, `F20`, `F21`, `F23`) are the only F-keys that are neither mapped in the firmware nor occupied by common browser/OS shortcuts — safe to assign a new Windhawk hotkey or other custom function.
+
 ## Project Structure
 
 ```
@@ -36,8 +52,8 @@ Working-Oryx-QMK-Sync/
 │   ├── keymap.c              ← Oryx-generated + patched MIDI layer
 │   ├── config.h              ← MIDI_ADVANCED, low-latency settings
 │   └── rules.mk              ← MIDI_ENABLE = yes
-├── Dockerfile                ← Debian arm-none-eabi QMK build container
-── qmk_firmware/             ← ZSA QMK fork (submodule, fetched at build time)
+├├── Dockerfile                ← Debian arm-none-eabi QMK build container
+└── qmk_firmware/           ← ZSA QMK fork (submodule, fetched at build time)
 ```
 
 ## Features
@@ -138,7 +154,15 @@ The `host_tools/windhawk/moonlander_language_sync.wh.cpp` companion mod provides
 
 The mod also syncs Windows input language to keyboard RGB over RAW HID (polled ~120 ms).
 
-**Collision note**: F21, F23 are already used as mod-tap triggers in the keymap; only F22 and F19 should be globally mapped in Windhawk.
+**Currently reserved F-keys on this keyboard** (changing any of these means updating the Windhawk mod and the matching Oryx key binding):
+
+| Used F-key | Firmware source | Used for |
+|---|---|---|
+| F1–F12 | Layer 1, Row 0 | Standard function row |
+| F18 | DANCE_0 (k40, left thumb) | Language switch (Windows) |
+| F19 | k52 tap (`MT(Shift+Ctrl, F19)`) | Case cycler (Windhawk) |
+| F22 | k51 tap (`MT(RCtrl, F22)`) | Wrong-language fixer (Windhawk) |
+| F24 | DUAL_FUNC_3 (Layer 3, right hand) | Period-space shortcut |
 
 **Wrong-language fixer**: Uses the Microsoft kbdhebl3 (Hebrew Standard) layout. Hebrew has no case, so transcription defaults to lowercase. Use F19 to cycle case afterward.
 
@@ -325,11 +349,11 @@ Investigation of QMK source confirmed:
 
 **Decision**: Use MIDI_ADVANCED (strict superset; future-proof). The bass shifter forwards a transposed note keycode to `process_midi()`, keeping the per-key snapshot so press/release use the same shifted keycode (no stuck notes).
 
-### Why F19/F22 instead of F21/F23?
+### Why F19/F22 for Windhawk (and not F13–F17)?
 
-The base keymap already emits F18 (×2), F21 (`LT(14,KC_F21)`), and F23 (`LT(9,KC_F23)`). Global Windhawk hotkeys must use scancodes NOT used by the keymap, else normal key presses would trigger them. Free F-keys: F13–F17, F19, F20, F22, F24.
+Global Windhawk hotkeys must use scancodes not already reserved by the firmware (see [F-key Availability Quick Reference](#fkey-ref) at the top). The free band is `F13`–`F17`, `F19`, `F20`, `F21`, `F22`, `F23`. `F19` and `F22` were chosen because the firmware already emits those codes on the keys that feel natural for text automation (`MT(Shift+Ctrl, F19)` and `MT(RCtrl, F22)` in the thumb cluster) — no Oryx remapping required.
 
-**Decision**: F19 (case cycler) and F22 (wrong-language fixer). F18 is shared intentionally (the keyboard's F18 language key is exactly what we want mirrored to the OS).
+`F18` is also shared intentionally — the keyboard's language tap-dance emits `F18`, which is exactly the hotkey Windhawk needs for the Windows language switch, so both sides agree automatically.
 
 ### Why preserve-by-default for Layer 2?
 
@@ -340,7 +364,7 @@ The original patch script overwrote the entire Layer 2 body, wiping any keys the
 ### Windhawk mod not working
 
 - Ensure Windhawk is installed and the mod is enabled
-- Check that F18/F19/F22 are mapped in Oryx as DANCE_0 / MT-mod-taps (not F21/F23)
+- Check that F18/F19/F22 are mapped as DANCE_0 (left thumb) and the thumb-cluster mod-taps (k51, k52)
 - The mod polls language state every ~120ms; rapid switching may lag
 - The mod targets `explorer.exe`; if another app has focus the window-level shortcut may not fire
 
