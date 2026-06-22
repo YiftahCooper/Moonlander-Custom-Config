@@ -2,7 +2,7 @@
 // @id              moonlander-language-sync
 // @name            Moonlander Language Sync
 // @description     Maps F18 to language switching, F22 to wrong-language text fixer, F19 to case cycling, and syncs EN/HE state to QMK RGB via RAW HID.
-// @version         1.2.2
+// @version         1.2.3
 // @include         explorer.exe
 // @compilerOptions -lsetupapi -lhid
 // ==/WindhawkMod==
@@ -238,15 +238,29 @@ void send_ctrl_v() {
 // pasted text. Re-select the pasted run by holding Shift and pressing Left
 // `count` times. This keeps the text highlighted so the user can trigger the
 // transform again (e.g. cycle case repeatedly) without re-selecting manually.
+//
+// The pure Shift+Left selection leaves the caret (cursor end) at the START
+// of the selection, which feels wrong — users expect the insertion point
+// after a paste to remain at the END of what was pasted. To fix this, we
+// follow the backwards selection with an equivalent Shift+Right selection
+// in the opposite direction so the caret returns to the rightmost edge.
 void reselect_after_paste(size_t count) {
     if (count == 0) {
         return;
     }
     clear_held_modifiers();
+    // Select backwards from caret-at-end (caret ends at START).
     send_key_event(VK_LSHIFT, true);
     for (size_t i = 0; i < count; i++) {
         send_key_event(VK_LEFT, true);
         send_key_event(VK_LEFT, false);
+    }
+    send_key_event(VK_LSHIFT, false);
+    // Re-select forward over the same run so the caret moves back to END.
+    send_key_event(VK_LSHIFT, true);
+    for (size_t i = 0; i < count; i++) {
+        send_key_event(VK_RIGHT, true);
+        send_key_event(VK_RIGHT, false);
     }
     send_key_event(VK_LSHIFT, false);
 }
