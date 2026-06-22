@@ -2,7 +2,7 @@
 // @id              moonlander-language-sync
 // @name            Moonlander Language Sync
 // @description     Maps F18 to language switching, F22 to wrong-language text fixer, F19 to case cycling, and syncs EN/HE state to QMK RGB via RAW HID.
-// @version         1.2.0
+// @version         1.2.1
 // @include         explorer.exe
 // @compilerOptions -lsetupapi -lhid
 // ==/WindhawkMod==
