@@ -2,7 +2,7 @@
 // @id              moonlander-language-sync
 // @name            Moonlander Language Sync
 // @description     Maps F18 to language switching, F22 to wrong-language text fixer, F19 to case cycling, and syncs EN/HE state to QMK RGB via RAW HID.
-// @version         1.2.3
+// @version         1.2.4
 // @include         explorer.exe
 // @compilerOptions -lsetupapi -lhid
 // ==/WindhawkMod==
@@ -395,7 +395,11 @@ void fix_wrong_language_clipboard() {
     if (transformed != text) {
         if (set_clipboard_text(transformed)) {
             send_ctrl_v();
-            reselect_after_paste(transformed.size());
+            // Intentionally do NOT reselect: a standard paste leaves the caret
+            // at the end (and unselected), which is the conventional behavior
+            // when a language-flip has occurred. The case cycler (F19) keeps
+            // the reselect in cycle_case_clipboard so pressing it again cycles
+            // the case of the still-highlighted text.
             if (g_settings.debug_logging) {
                 Wh_Log(L"F22: Flipped %zu characters", transformed.size());
             }
