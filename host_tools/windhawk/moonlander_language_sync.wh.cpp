@@ -2,7 +2,7 @@
 // @id              moonlander-language-sync
 // @name            Moonlander Language Sync
 // @description     Maps F18 to language switching, F22 to wrong-language text fixer, F19 to case cycling, and syncs EN/HE state to QMK RGB via RAW HID.
-// @version         1.2.7
+// @version         1.2.8
 // @include         explorer.exe
 // @compilerOptions -lsetupapi -lhid
 // ==/WindhawkMod==
@@ -234,6 +234,46 @@ void send_ctrl_v() {
     Sleep(kClipboardDelayMs);
 }
 
+// Returns true if a virtual key is an "extended" key that must carry the
+// KEYEVENTF_EXTENDEDKEY flag (arrows, navigation cluster, etc.) so apps treat
+// it as a real cursor key rather than a non-extended virtual key.
+static inline bool is_extended_vk(WORD vk) {
+    switch (vk) {
+        case VK_LEFT:   case VK_RIGHT:
+        case VK_UP:     case VK_DOWN:
+        case VK_HOME:   case VK_END:
+        case VK_PRIOR:  case VK_NEXT:
+        case VK_INSERT: case VK_DELETE:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Append a key-down + key-up pair for `vk` into the INPUT batch.
+static void push_key_tap(std::vector<INPUT> &batch, WORD vk) {
+    DWORD ext = is_extended_vk(vk) ? KEYEVENTF_EXTENDEDKEY : 0;
+    INPUT down = {};
+    down.type = INPUT_KEYBOARD;
+    down.ki.wVk = vk;
+    down.ki.dwFlags = ext;
+    batch.push_back(down);
+    INPUT up = {};
+    up.type = INPUT_KEYBOARD;
+    up.ki.wVk = vk;
+    up.ki.dwFlags = ext | KEYEVENTF_KEYUP;
+    batch.push_back(up);
+}
+
+static void push_key_state(std::vector<INPUT> &batch, WORD vk, bool pressed) {
+    DWORD ext = is_extended_vk(vk) ? KEYEVENTF_EXTENDEDKEY : 0;
+    INPUT in = {};
+    in.type = INPUT_KEYBOARD;
+    in.ki.wVk = vk;
+    in.ki.dwFlags = ext | (pressed ? 0 : KEYEVENTF_KEYUP);
+    batch.push_back(in);
+}
+
 // After a paste, the selection is lost and the caret sits at the end of the
 // pasted text. Re-select the pasted run so the user can press F19 again to
 // advance the case without manually re-highlighting.
@@ -244,54 +284,49 @@ void send_ctrl_v() {
 //      user starts typing before pressing F19 again, text is inserted after
 //      the pasted run, not overwritten into it).
 //
-// Approach: two phases separated by a deliberate pause.
+// Approach: two phases, each fired as a SINGLE batched SendInput call so the
+// keystrokes are delivered atomically and in order with no per-key sleeps.
 //   Phase 1: Left × N (no Shift) — move the caret to the START of the pasted
 //            run. Anchor follows the cursor, so no selection is created.
-//   Pause.
-//   Phase 2: Shift+Right × N — extend a new selection starting from the new
-//            anchor (at P-N) forward by N positions. The caret ends at P
-//            (right edge) with N chars selected.
-//
-// The Sleeps between individual keystrokes exist because SendInput returns
-// immediately while the application processes events asynchronously. Without
-// pacing, applications may coalesce keys or see them out of order relative
-// to the pending paste completion.
+//   Phase 2: Shift+Right × N — extend a new selection from the new anchor
+//            (at P-N) forward by N positions. Caret ends at P (right edge).
 void reselect_after_paste(size_t count) {
     if (count == 0) {
         return;
     }
 
-    // Give the application a brief window to commit the paste into its
-    // text buffer before we start moving the caret. Without this, cursor
-    // moves arrive while the paste is still being processed and produce
-    // the "cursor briefly moves back then snaps to end" symptom.
-    Sleep(50);
+    // Brief window for the application to commit the paste into its text
+    // buffer before cursor moves arrive (prevents the "cursor moves back
+    // then snaps to end" race).
+    Sleep(35);
 
     clear_held_modifiers();
 
-    // Phase 1: move caret to start of pasted run.
-    for (size_t i = 0; i < count; i++) {
-        send_key_event(VK_LEFT, true);
-        Sleep(2);
-        send_key_event(VK_LEFT, false);
-        Sleep(2);
+    // Phase 1: move caret to the start of the pasted run (one batched call).
+    {
+        std::vector<INPUT> batch;
+        batch.reserve(count * 2);
+        for (size_t i = 0; i < count; i++) {
+            push_key_tap(batch, VK_LEFT);
+        }
+        SendInput(static_cast<UINT>(batch.size()), batch.data(), sizeof(INPUT));
     }
 
-    // Pause between phases so the anchor is committed at P-N before we
-    // enter shift-extend mode.
-    Sleep(15);
+    // Small pause so the anchor commits at P-N before shift-extend mode.
+    Sleep(10);
 
-    // Phase 2: extend selection forward so the full run is highlighted
-    // AND the caret ends at the right edge.
-    send_key_event(VK_LSHIFT, true);
-    Sleep(2);
-    for (size_t i = 0; i < count; i++) {
-        send_key_event(VK_RIGHT, true);
-        Sleep(2);
-        send_key_event(VK_RIGHT, false);
-        Sleep(2);
+    // Phase 2: shift+right over the run (one batched call): Shift down,
+    // Right × N, Shift up. Highlights N chars with the caret at the right.
+    {
+        std::vector<INPUT> batch;
+        batch.reserve(count * 2 + 2);
+        push_key_state(batch, VK_LSHIFT, true);
+        for (size_t i = 0; i < count; i++) {
+            push_key_tap(batch, VK_RIGHT);
+        }
+        push_key_state(batch, VK_LSHIFT, false);
+        SendInput(static_cast<UINT>(batch.size()), batch.data(), sizeof(INPUT));
     }
-    send_key_event(VK_LSHIFT, false);
 }
 
 // Returns true if ch is a Hebrew letter (final + non-final forms live in the
