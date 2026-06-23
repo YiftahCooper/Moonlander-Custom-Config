@@ -293,21 +293,6 @@ void reselect_after_paste(size_t count) {
     }
     send_key_event(VK_LSHIFT, false);
 }
-    clear_held_modifiers();
-    // Move caret to the start of the pasted run (no selection).
-    for (size_t i = 0; i < count; i++) {
-        send_key_event(VK_LEFT, true);
-        send_key_event(VK_LEFT, false);
-    }
-    // Re-select forward so the full run is highlighted AND the caret
-    // lands at the RIGHT edge.
-    send_key_event(VK_LSHIFT, true);
-    for (size_t i = 0; i < count; i++) {
-        send_key_event(VK_RIGHT, true);
-        send_key_event(VK_RIGHT, false);
-    }
-    send_key_event(VK_LSHIFT, false);
-}
 
 // Returns true if ch is a Hebrew letter (final + non-final forms live in the
 // Unicode block U+05D0..U+05EA).
