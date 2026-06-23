@@ -2,7 +2,7 @@
 // @id              moonlander-language-sync
 // @name            Moonlander Language Sync
 // @description     Maps F18 to language switching, F22 to wrong-language text fixer, F19 to case cycling, and syncs EN/HE state to QMK RGB via RAW HID.
-// @version         1.2.5
+// @version         1.2.6
 // @include         explorer.exe
 // @compilerOptions -lsetupapi -lhid
 // ==/WindhawkMod==
@@ -240,20 +240,59 @@ void send_ctrl_v() {
 //
 // Two properties must hold simultaneously:
 //   1. N characters are highlighted (so F19's Ctrl+C copies the right run again)
-//   2. The blinking caret rests at the RIGHT edge of the selection (so if
-//      the user starts typing before pressing F19 again, text is inserted
-//      after the pasted run, not overwritten into it).
+//   2. The blinking caret rests at the RIGHT edge of the selection (so if the
+//      user starts typing before pressing F19 again, text is inserted after
+//      the pasted run, not overwritten into it).
 //
-// Approach: move the caret to the START of the pasted run without Shift
-// (anchor follows, leaving no selection), then Shift+Right×N to extend a
-// forward selection from that new anchor. This produces: selection = N
-// chars, caret = right edge. The naive "Shift+Left×N" alternative fails
-// because Shift+Right×N afterwards shrinks the selection back to zero
-// (anchor stays at original position).
+// Approach: two phases separated by a deliberate pause.
+//   Phase 1: Left × N (no Shift) — move the caret to the START of the pasted
+//            run. Anchor follows the cursor, so no selection is created.
+//   Pause.
+//   Phase 2: Shift+Right × N — extend a new selection starting from the new
+//            anchor (at P-N) forward by N positions. The caret ends at P
+//            (right edge) with N chars selected.
+//
+// The Sleeps between individual keystrokes exist because SendInput returns
+// immediately while the application processes events asynchronously. Without
+// pacing, applications may coalesce keys or see them out of order relative
+// to the pending paste completion.
 void reselect_after_paste(size_t count) {
     if (count == 0) {
         return;
     }
+
+    // Give the application time to commit the paste before we start moving
+    // the caret. Applications typically process Ctrl+V internally and then
+    // commit the new buffer state; sending cursor moves before that commit
+    // finishes is what produced the "cursor briefly moves back" symptom.
+    Sleep(150);
+
+    clear_held_modifiers();
+
+    // Phase 1: move caret to start of pasted run.
+    for (size_t i = 0; i < count; i++) {
+        send_key_event(VK_LEFT, true);
+        Sleep(8);
+        send_key_event(VK_LEFT, false);
+        Sleep(8);
+    }
+
+    // Pause between phases so the anchor is committed at P-N before we
+    // enter shift-extend mode.
+    Sleep(30);
+
+    // Phase 2: extend selection forward so the full run is highlighted
+    // AND the caret ends at the right edge.
+    send_key_event(VK_LSHIFT, true);
+    Sleep(8);
+    for (size_t i = 0; i < count; i++) {
+        send_key_event(VK_RIGHT, true);
+        Sleep(8);
+        send_key_event(VK_RIGHT, false);
+        Sleep(8);
+    }
+    send_key_event(VK_LSHIFT, false);
+}
     clear_held_modifiers();
     // Move caret to the start of the pasted run (no selection).
     for (size_t i = 0; i < count; i++) {
@@ -489,6 +528,20 @@ void send_key_event(WORD virtual_key, bool pressed) {
     input.ki.wVk = virtual_key;
     if (!pressed) {
         input.ki.dwFlags = KEYEVENTF_KEYUP;
+    }
+    // Arrow keys and other navigation keys require the extended-key flag;
+    // without it, many Win32 apps treat them as non-extended virtual keys,
+    // which silently breaks shift-extend selection on arrows.
+    switch (virtual_key) {
+        case VK_LEFT:   case VK_RIGHT:
+        case VK_UP:     case VK_DOWN:
+        case VK_HOME:   case VK_END:
+        case VK_PRIOR:  case VK_NEXT:
+        case VK_INSERT: case VK_DELETE:
+            input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+            break;
+        default:
+            break;
     }
     SendInput(1, &input, sizeof(INPUT));
 }
