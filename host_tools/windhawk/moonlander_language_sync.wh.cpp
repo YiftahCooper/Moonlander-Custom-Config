@@ -2,7 +2,7 @@
 // @id              moonlander-language-sync
 // @name            Moonlander Language Sync
 // @description     Maps F18 to language switching, F22 to wrong-language text fixer, F19 to case cycling, and syncs EN/HE state to QMK RGB via RAW HID.
-// @version         1.2.4
+// @version         1.2.5
 // @include         explorer.exe
 // @compilerOptions -lsetupapi -lhid
 // ==/WindhawkMod==
@@ -235,28 +235,33 @@ void send_ctrl_v() {
 }
 
 // After a paste, the selection is lost and the caret sits at the end of the
-// pasted text. Re-select the pasted run by holding Shift and pressing Left
-// `count` times. This keeps the text highlighted so the user can trigger the
-// transform again (e.g. cycle case repeatedly) without re-selecting manually.
+// pasted text. Re-select the pasted run so the user can press F19 again to
+// advance the case without manually re-highlighting.
 //
-// The pure Shift+Left selection leaves the caret (cursor end) at the START
-// of the selection, which feels wrong — users expect the insertion point
-// after a paste to remain at the END of what was pasted. To fix this, we
-// follow the backwards selection with an equivalent Shift+Right selection
-// in the opposite direction so the caret returns to the rightmost edge.
+// Two properties must hold simultaneously:
+//   1. N characters are highlighted (so F19's Ctrl+C copies the right run again)
+//   2. The blinking caret rests at the RIGHT edge of the selection (so if
+//      the user starts typing before pressing F19 again, text is inserted
+//      after the pasted run, not overwritten into it).
+//
+// Approach: move the caret to the START of the pasted run without Shift
+// (anchor follows, leaving no selection), then Shift+Right×N to extend a
+// forward selection from that new anchor. This produces: selection = N
+// chars, caret = right edge. The naive "Shift+Left×N" alternative fails
+// because Shift+Right×N afterwards shrinks the selection back to zero
+// (anchor stays at original position).
 void reselect_after_paste(size_t count) {
     if (count == 0) {
         return;
     }
     clear_held_modifiers();
-    // Select backwards from caret-at-end (caret ends at START).
-    send_key_event(VK_LSHIFT, true);
+    // Move caret to the start of the pasted run (no selection).
     for (size_t i = 0; i < count; i++) {
         send_key_event(VK_LEFT, true);
         send_key_event(VK_LEFT, false);
     }
-    send_key_event(VK_LSHIFT, false);
-    // Re-select forward over the same run so the caret moves back to END.
+    // Re-select forward so the full run is highlighted AND the caret
+    // lands at the RIGHT edge.
     send_key_event(VK_LSHIFT, true);
     for (size_t i = 0; i < count; i++) {
         send_key_event(VK_RIGHT, true);
