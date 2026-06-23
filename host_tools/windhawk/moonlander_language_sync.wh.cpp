@@ -2,7 +2,7 @@
 // @id              moonlander-language-sync
 // @name            Moonlander Language Sync
 // @description     Maps F18 to language switching, F22 to wrong-language text fixer, F19 to case cycling, and syncs EN/HE state to QMK RGB via RAW HID.
-// @version         1.2.6
+// @version         1.2.7
 // @include         explorer.exe
 // @compilerOptions -lsetupapi -lhid
 // ==/WindhawkMod==
@@ -261,35 +261,35 @@ void reselect_after_paste(size_t count) {
         return;
     }
 
-    // Give the application time to commit the paste before we start moving
-    // the caret. Applications typically process Ctrl+V internally and then
-    // commit the new buffer state; sending cursor moves before that commit
-    // finishes is what produced the "cursor briefly moves back" symptom.
-    Sleep(150);
+    // Give the application a brief window to commit the paste into its
+    // text buffer before we start moving the caret. Without this, cursor
+    // moves arrive while the paste is still being processed and produce
+    // the "cursor briefly moves back then snaps to end" symptom.
+    Sleep(50);
 
     clear_held_modifiers();
 
     // Phase 1: move caret to start of pasted run.
     for (size_t i = 0; i < count; i++) {
         send_key_event(VK_LEFT, true);
-        Sleep(8);
+        Sleep(2);
         send_key_event(VK_LEFT, false);
-        Sleep(8);
+        Sleep(2);
     }
 
     // Pause between phases so the anchor is committed at P-N before we
     // enter shift-extend mode.
-    Sleep(30);
+    Sleep(15);
 
     // Phase 2: extend selection forward so the full run is highlighted
     // AND the caret ends at the right edge.
     send_key_event(VK_LSHIFT, true);
-    Sleep(8);
+    Sleep(2);
     for (size_t i = 0; i < count; i++) {
         send_key_event(VK_RIGHT, true);
-        Sleep(8);
+        Sleep(2);
         send_key_event(VK_RIGHT, false);
-        Sleep(8);
+        Sleep(2);
     }
     send_key_event(VK_LSHIFT, false);
 }
