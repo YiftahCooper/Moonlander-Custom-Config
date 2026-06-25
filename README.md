@@ -4,7 +4,7 @@ Hey! This repo combines my ZSA Moonlander's online Oryx layout with custom QMK f
 * Case switching functionality
 * A language correction feature that transplaces Hebrew characters with their english equivalent on a qwerty layout, and visa versa. This is to fix the problem of typing out an entire English scentence o ly to discover I had accidently been using hebrew characters. 
 * Some custom keys and functions, for example quickly double tapping the right space key outputs ". " just like on my mobile phone
-The beauty of this setup is that it uses a CI that builds it all automatically, merging oryx and my custom code cleanly and outputing a compiled .bin file to flash
+The beauty of this setup is that it uses a CI that builds it all automatically, merging oryx and my custom code cleanly and outputing a compiled .bin file to flash. Full credit to poulainpi for that functionality:  https://github.com/poulainpi/oryx-with-custom-qmk
 
 Open https://configure.zsa.io/moonlander/layouts/3aMQz/latest/0 to see the base layout — most custom keys have peach-colored labels that mark function-key placeholders which get replaced with real behavior by the patch script after the firmware builds.
 
