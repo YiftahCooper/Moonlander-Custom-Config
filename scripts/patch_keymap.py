@@ -15,11 +15,15 @@ LANGUAGE_HOLD_PREF_MARKER = "ORYX_LANG_HOLD_PREF_PATCH"
 LANGUAGE_ON_DANCE_NOOP_MARKER = "ORYX_LANG_ON_DANCE_NOOP_PATCH"
 LANGUAGE_TAP_TERM_MARKER = "ORYX_LANG_TAP_TERM_PATCH"
 LANGUAGE_F18_HOLD_MARKER = "ORYX_LANG_F18_HOLD_PREF_PATCH"
-LANGUAGE_F18_DOUBLETAP_MARKER = "ORYX_LANG_F18_DOUBLETAP_PATCH"
+LANGUAGE_F22_DOUBLETAP_MARKER = "ORYX_LANG_F22_DOUBLETAP_PATCH"
 TAPHOLD_COMPAT_MARKER = "ORYX_TAPHOLD_FALLBACK_PATCH"
 DOUBLETAP_COMPAT_MARKER = "ORYX_DOUBLETAP_FALLBACK_PATCH"
 SPACESHIFT_HOLD_PREF_MARKER = "ORYX_SPACESHIFT_HOLD_PREF_PATCH"
 SPACE_DOT_TERM_MARKER = "ORYX_SPACE_DOT_TERM_PATCH"
+TRIPLE_TAP_ENUM_MARKER = "ORYX_TEXT_TOOLS_TRIPLE_ENUM_PATCH"
+TRIPLE_TAP_STEP_MARKER = "ORYX_TEXT_TOOLS_TRIPLE_STEP_PATCH"
+TRIPLE_TAP_ON_DANCE_MARKER = "ORYX_TEXT_TOOLS_TRIPLE_ON_DANCE_PATCH"
+TRIPLE_TAP_ACTION_MARKER = "ORYX_TEXT_TOOLS_TRIPLE_ACTION_PATCH"
 LANGUAGE_SWITCH_TAPPING_TERM_MS = 2000
 SPACE_DOT_TERM_SCALE_NUM = 6
 SPACE_DOT_TERM_SCALE_DEN = 5
@@ -243,6 +247,219 @@ def _discover_dance_indices(content: str) -> list[int]:
         return sorted(indices)
     # Fallback for unexpected source layouts.
     return list(range(0, 24))
+
+
+def _find_unique_dance_by_signature(
+    content: str,
+    dance_indices: list[int],
+    label: str,
+    signature: Callable[[str], bool],
+) -> int:
+    matches = []
+    for dance_idx in dance_indices:
+        body, found = _get_function_body(content, f"dance_{dance_idx}_finished")
+        if found and signature(body):
+            matches.append(dance_idx)
+
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Could not uniquely identify {label} tap dance by behavior signature; "
+            f"found {matches or 'none'}"
+        )
+    return matches[0]
+
+
+def _insert_triple_case(body: str, action: str, marker_suffix: str) -> str:
+    marker = f"{TRIPLE_TAP_ACTION_MARKER}_{marker_suffix}"
+    if marker in body:
+        return body
+
+    switch_close = body.rfind("}")
+    if switch_close == -1:
+        raise RuntimeError("Tap-dance handler has no switch block for TRIPLE_TAP")
+
+    case_indent_match = re.search(r"^(?P<indent>[ \t]*)case\s+SINGLE_TAP\s*:", body, re.MULTILINE)
+    if not case_indent_match:
+        raise RuntimeError("Tap-dance handler has no SINGLE_TAP case")
+    indent = case_indent_match.group("indent")
+    triple_case = f"{indent}case TRIPLE_TAP: {action} break; /* {marker} */\n"
+    return body[:switch_close] + triple_case + body[switch_close:]
+
+
+def _remove_marked_triple_case(body: str, marker_suffix: str) -> str:
+    marker = f"{TRIPLE_TAP_ACTION_MARKER}_{marker_suffix}"
+    return re.sub(
+        rf"^[ \t]*case\s+TRIPLE_TAP\s*:[^\r\n]*{re.escape(marker)}[^\r\n]*(?:\r?\n|$)",
+        "",
+        body,
+        flags=re.MULTILINE,
+    )
+
+
+def _patch_triple_tap_text_tools(content: str) -> tuple[str, dict[str, int]]:
+    """
+    Add deterministic triple-tap host triggers to the two space dances.
+
+    Targets are discovered from their single/hold/double behavior, never their
+    generated DANCE_n indices. Generated count==3 repeat callbacks are disabled
+    for the language and space dances. The language key deliberately has no
+    triple-tap action; transplantation is its double tap. A held third tap and
+    four-or-more taps resolve to MORE_TAPS, for which these handlers have no
+    action.
+    """
+    dance_indices = _discover_dance_indices(content)
+    language_idx = _find_unique_dance_by_signature(
+        content,
+        dance_indices,
+        "language/Ctrl",
+        lambda body: (
+            "case SINGLE_TAP:" in body
+            and "KC_F18" in body
+            and "case SINGLE_HOLD: register_code16(KC_LEFT_CTRL);" in body
+        ),
+    )
+    left_space_idx = _find_unique_dance_by_signature(
+        content,
+        dance_indices,
+        "left-space/Shift/Caps Lock",
+        lambda body: (
+            "case SINGLE_TAP: register_code16(KC_SPACE);" in body
+            and "case SINGLE_HOLD: register_code16(KC_LEFT_SHIFT);" in body
+            and "case DOUBLE_TAP: register_code16(KC_CAPS);" in body
+        ),
+    )
+    right_space_idx = _find_unique_dance_by_signature(
+        content,
+        dance_indices,
+        "right-space/period-space",
+        lambda body: (
+            "case SINGLE_TAP: register_code16(KC_SPACE);" in body
+            and "case SINGLE_HOLD: register_code16(KC_SPACE);" in body
+            and "case DOUBLE_TAP:" in body
+            and (
+                "tap_code16(KC_KP_DOT); tap_code16(KC_SPACE);" in body
+                or "KC_F24" in body
+            )
+        ),
+    )
+
+    targets = {
+        "language": language_idx,
+        "left_space": left_space_idx,
+        "right_space": right_space_idx,
+    }
+    if len(set(targets.values())) != 3:
+        raise RuntimeError(f"Triple-tap behavior signatures overlap: {targets}")
+
+    if TRIPLE_TAP_ENUM_MARKER not in content:
+        enum_pattern = re.compile(r"^(?P<indent>[ \t]*)MORE_TAPS(?P<comma>\s*,?)", re.MULTILINE)
+        replacement = (
+            rf"\g<indent>TRIPLE_TAP, /* {TRIPLE_TAP_ENUM_MARKER} */\n"
+            r"\g<indent>MORE_TAPS\g<comma>"
+        )
+        content, replaced = enum_pattern.subn(replacement, content, count=1)
+        if replaced != 1:
+            raise RuntimeError("Could not add TRIPLE_TAP to the Oryx dance-state enum")
+
+    dance_step_body = (
+        "\n"
+        "    if (state->count == 1) {\n"
+        "        if (state->interrupted || !state->pressed) return SINGLE_TAP;\n"
+        "        return SINGLE_HOLD;\n"
+        "    } else if (state->count == 2) {\n"
+        "        if (state->interrupted) return DOUBLE_SINGLE_TAP;\n"
+        "        if (state->pressed) return DOUBLE_HOLD;\n"
+        "        return DOUBLE_TAP;\n"
+        "    } else if (state->count == 3) {\n"
+        f"        if (state->interrupted || !state->pressed) return TRIPLE_TAP; /* {TRIPLE_TAP_STEP_MARKER} */\n"
+        "        return MORE_TAPS;\n"
+        "    }\n"
+        "    return MORE_TAPS;\n"
+    )
+    if not _get_function_body(content, "dance_step")[1]:
+        raise RuntimeError("Could not find Oryx dance_step function")
+    content = _replace_function_body(content, "dance_step", dance_step_body)
+
+    for dance_idx in targets.values():
+        on_name = f"on_dance_{dance_idx}"
+        on_body, has_on = _get_function_body(content, on_name)
+        if not has_on:
+            raise RuntimeError(f"Missing generated {on_name} callback")
+        if TRIPLE_TAP_ON_DANCE_MARKER not in on_body:
+            no_op_body = (
+                "\n"
+                "    // Multi-tap actions are resolved only by dance_step().\n"
+                "    (void)state;\n"
+                f"    (void)user_data; /* {TRIPLE_TAP_ON_DANCE_MARKER} */\n"
+            )
+            content = _replace_function_body(content, on_name, no_op_body)
+
+    # Migrate the previous, incorrect language-triple implementation.
+    for function_name in (
+        f"dance_{language_idx}_finished",
+        f"dance_{language_idx}_reset",
+    ):
+        body, found = _get_function_body(content, function_name)
+        if not found:
+            raise RuntimeError(f"Missing generated {function_name} callback")
+        content = _replace_function_body(
+            content,
+            function_name,
+            _remove_marked_triple_case(body, "F22"),
+        )
+
+    actions = {
+        left_space_idx: ("tap_code16(KC_F19);", "F19"),
+        right_space_idx: ("tap_code16(KC_F13);", "F13"),
+    }
+    for dance_idx, (action, suffix) in actions.items():
+        finished_name = f"dance_{dance_idx}_finished"
+        finished_body, has_finished = _get_function_body(content, finished_name)
+        if not has_finished:
+            raise RuntimeError(f"Missing generated {finished_name} callback")
+        finished_body = _insert_triple_case(finished_body, action, suffix)
+        content = _replace_function_body(content, finished_name, finished_body)
+
+        reset_name = f"dance_{dance_idx}_reset"
+        reset_body, has_reset = _get_function_body(content, reset_name)
+        if not has_reset:
+            raise RuntimeError(f"Missing generated {reset_name} callback")
+        reset_body = _insert_triple_case(reset_body, "", suffix)
+        content = _replace_function_body(content, reset_name, reset_body)
+
+    return content, targets
+
+
+def _patch_modifier_only_thumb_keys(content: str) -> tuple[str, int]:
+    """Keep the two auxiliary left-thumb keys modifier-only."""
+    replacements = (
+        (
+            re.compile(r"MT\(\s*MOD_RCTL\s*,\s*KC_(?:F22|NO)\s*\)"),
+            "MT(MOD_RCTL, KC_NO)",
+            "Right Ctrl",
+        ),
+        (
+            re.compile(
+                r"MT\(\s*(?:MOD_LSFT\s*\|\s*MOD_LCTL|MOD_LCTL\s*\|\s*MOD_LSFT)\s*,\s*KC_(?:F19|NO)\s*\)"
+            ),
+            "MT(MOD_LSFT | MOD_LCTL, KC_NO)",
+            "Shift+Ctrl",
+        ),
+    )
+    patched = content
+    changed = 0
+    for pattern, replacement, label in replacements:
+        matches = list(pattern.finditer(patched))
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"Could not uniquely identify the {label} modifier-only thumb key; "
+                f"found {len(matches)} matches"
+            )
+        original = matches[0].group(0)
+        patched = patched[:matches[0].start()] + replacement + patched[matches[0].end():]
+        if original != replacement:
+            changed += 1
+    return patched, changed
 
 
 def _replace_case_block(body: str, case_name: str, replacement_builder: Callable[[str], str]) -> tuple[str, bool]:
@@ -843,21 +1060,19 @@ def _patch_f18_language_dance(content: str) -> tuple[str, bool]:
     LALT(KC_LEFT_SHIFT) firmware mechanism (language switching is owned by the
     Windhawk host bridge via F18).
 
-    The Oryx-generated language dance maps:
+    The required language dance maps:
         SINGLE_TAP        -> KC_F18   (Windhawk: switch language)
         SINGLE_HOLD       -> KC_LEFT_CTRL
-        DOUBLE_TAP        -> KC_F22   (wrong-language fixer -- NOT what the user wants)
+        DOUBLE_TAP        -> KC_F22   (CopyQ: literal language transplantation)
         DOUBLE_SINGLE_TAP -> KC_F22
 
-    Two problems are fixed here:
+    Two behaviors are enforced here:
       1) Hold did not feel like a normal mod-tap. With HOLD_ON_OTHER_KEY_PRESS,
          pressing another key while holding interrupts the dance, and the stock
          dance_step() returns SINGLE_TAP -> it fired F18 instead of Ctrl. We force
          an interrupted single press to resolve to SINGLE_HOLD (Ctrl), matching
          every normal mod-tap key on the board.
-      2) Double-tap fired the transliteration fixer (F22). The user expects a
-         double tap to switch language, so we remap DOUBLE_TAP / DOUBLE_SINGLE_TAP
-         to KC_F18 as well (a second language switch).
+      2) Double-tap and interrupted double-tap emit F22 for transplantation.
 
     Detection: the language dance is the one whose *_finished body taps/registers
     KC_F18 in its SINGLE_TAP case.
@@ -897,49 +1112,78 @@ def _patch_f18_language_dance(content: str) -> tuple[str, bool]:
             if n:
                 patched_any = True
 
-        # (2) Double tap -> language switch (F18), not the F22 fixer.
+        # (2) Double tap -> CopyQ physical-key transplantation (F22).
         finished_new, dt = _replace_case_block(
             finished_new,
             "DOUBLE_TAP",
             lambda indent: (
-                f"{indent}case DOUBLE_TAP: register_code16(KC_F18); "
-                f"break; /* {LANGUAGE_F18_DOUBLETAP_MARKER} */"
+                f"{indent}case DOUBLE_TAP: register_code16(KC_F22); "
+                f"break; /* {LANGUAGE_F22_DOUBLETAP_MARKER} */"
             ),
         )
         finished_new, dst = _replace_case_block(
             finished_new,
             "DOUBLE_SINGLE_TAP",
             lambda indent: (
-                f"{indent}case DOUBLE_SINGLE_TAP: register_code16(KC_F18); "
-                f"break; /* {LANGUAGE_F18_DOUBLETAP_MARKER} */"
+                f"{indent}case DOUBLE_SINGLE_TAP: register_code16(KC_F22); "
+                f"break; /* {LANGUAGE_F22_DOUBLETAP_MARKER} */"
             ),
         )
         if dt or dst:
             patched_any = True
 
+        required_finished = (
+            "case SINGLE_TAP: register_code16(KC_F18);",
+            "case SINGLE_HOLD: register_code16(KC_LEFT_CTRL);",
+            "case DOUBLE_TAP: register_code16(KC_F22);",
+            "case DOUBLE_SINGLE_TAP: register_code16(KC_F22);",
+        )
+        missing_finished = [
+            snippet for snippet in required_finished if snippet not in finished_new
+        ]
+        if missing_finished:
+            raise RuntimeError(
+                f"Language double-tap contract is incomplete in {finished_name}: "
+                + ", ".join(missing_finished)
+            )
+
         content = _replace_function_body(content, finished_name, finished_new)
 
-        # Mirror the keycode change in the matching reset handler (unregister F18).
+        # Mirror the keycode change in the matching reset handler.
         reset_body, has_reset = _get_function_body(content, reset_name)
-        if has_reset:
-            reset_new = reset_body
-            reset_new, _ = _replace_case_block(
-                reset_new,
-                "DOUBLE_TAP",
-                lambda indent: (
-                    f"{indent}case DOUBLE_TAP: unregister_code16(KC_F18); "
-                    f"break; /* {LANGUAGE_F18_DOUBLETAP_MARKER} */"
-                ),
+        if not has_reset:
+            raise RuntimeError(f"Language double-tap contract is missing {reset_name}")
+
+        reset_new = reset_body
+        reset_new, _ = _replace_case_block(
+            reset_new,
+            "DOUBLE_TAP",
+            lambda indent: (
+                f"{indent}case DOUBLE_TAP: unregister_code16(KC_F22); "
+                f"break; /* {LANGUAGE_F22_DOUBLETAP_MARKER} */"
+            ),
+        )
+        reset_new, _ = _replace_case_block(
+            reset_new,
+            "DOUBLE_SINGLE_TAP",
+            lambda indent: (
+                f"{indent}case DOUBLE_SINGLE_TAP: unregister_code16(KC_F22); "
+                f"break; /* {LANGUAGE_F22_DOUBLETAP_MARKER} */"
+            ),
+        )
+        required_reset = (
+            "case SINGLE_TAP: unregister_code16(KC_F18);",
+            "case SINGLE_HOLD: unregister_code16(KC_LEFT_CTRL);",
+            "case DOUBLE_TAP: unregister_code16(KC_F22);",
+            "case DOUBLE_SINGLE_TAP: unregister_code16(KC_F22);",
+        )
+        missing_reset = [snippet for snippet in required_reset if snippet not in reset_new]
+        if missing_reset:
+            raise RuntimeError(
+                f"Language double-tap contract is incomplete in {reset_name}: "
+                + ", ".join(missing_reset)
             )
-            reset_new, _ = _replace_case_block(
-                reset_new,
-                "DOUBLE_SINGLE_TAP",
-                lambda indent: (
-                    f"{indent}case DOUBLE_SINGLE_TAP: unregister_code16(KC_F18); "
-                    f"break; /* {LANGUAGE_F18_DOUBLETAP_MARKER} */"
-                ),
-            )
-            content = _replace_function_body(content, reset_name, reset_new)
+        content = _replace_function_body(content, reset_name, reset_new)
 
         # Only one language dance exists; stop after patching it.
         return content, patched_any
@@ -1389,6 +1633,12 @@ def patch_keymap(layout_dir: str) -> None:
     dance_indices = _discover_dance_indices(content)
     print(f"Discovered tap-dance indices: {dance_indices}")
 
+    content, modifier_only_changes = _patch_modifier_only_thumb_keys(content)
+    print(
+        "Enforced modifier-only left-thumb keys "
+        f"({modifier_only_changes} tap bindings removed)"
+    )
+
     # 1) Keep key semantics Oryx-managed, but allow RGB hook injection so
     # custom language indicator state can be driven from host RAW HID updates.
     enable_language_injection = False
@@ -1434,12 +1684,23 @@ def patch_keymap(layout_dir: str) -> None:
     else:
         print("Skipping language RGB indicator hook patching (Oryx-managed language behavior).")
 
-    # 4b) Fix the F18-based language dance hold feel + double-tap (Bug 3).
+    # 4b) Enforce language tap/hold/double semantics.
     content, f18_lang_patched = _patch_f18_language_dance(content)
     if f18_lang_patched:
-        print("Patched F18 language dance: hold-preference (Ctrl) + double-tap language switch")
+        print("Patched language dance: tap F18, hold Ctrl, double-tap F22")
     else:
         print("No F18 language dance found to patch (skipping).")
+
+    # 4c) Add deterministic host text-tool triggers to the two space dances.
+    # This is intentionally strict: an Oryx export whose behavior signatures no
+    # longer match must fail rather than risk patching the wrong physical key.
+    content, triple_tap_targets = _patch_triple_tap_text_tools(content)
+    print(
+        "Patched triple-tap text tools: "
+        f"language DANCE_{triple_tap_targets['language']} -> no triple action, "
+        f"left-space DANCE_{triple_tap_targets['left_space']} -> F19, "
+        f"right-space DANCE_{triple_tap_targets['right_space']} -> F13"
+    )
 
     # 5) For the SPACE/SHIFT dance, prefer hold when interrupted by another key.
     content, spaceshift_hold_pref_patched = _prefer_hold_for_space_shift_dance(content, dance_indices)

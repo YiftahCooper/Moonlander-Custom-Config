@@ -2,3 +2,7 @@
 __pycache__/
 *.py[cod]
 
+# Local .NET build output
+**/bin/
+**/obj/
+

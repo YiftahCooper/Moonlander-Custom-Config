@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Moonlander.Reselect/Moonlander.Reselect.csproj" />
+  <Project Path="Moonlander.Reselect.Tests/Moonlander.Reselect.Tests.csproj" />
+</Solution>

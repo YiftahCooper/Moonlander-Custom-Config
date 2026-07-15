@@ -1,10 +1,12 @@
-Hey! This repo combines my ZSA Moonlander's online Oryx layout with custom QMK firmware and a custom windhawk mod. The Oryx web configurator is limited so I supplemented it with custom code. The additions: 
-* A 12-note chromatic MIDI piano layer
-* Hebrew/English language-aware RGB (requires accompanying windhawk mod)
-* Case switching functionality (requires windhawk mod)
-* A language correction feature that transplaces Hebrew characters with their english equivalent on a qwerty layout, and visa versa (requires windhawk mod). This is to fix the problem of typing out an entire English scentence o ly to discover I had accidently been using hebrew characters. 
-* Some custom keys and functions, for example quickly double tapping the right space key outputs ". " just like on my mobile phone
-The beauty of this setup is that it uses a CI that builds it all automatically, merging oryx and my custom code cleanly and outputing a compiled .bin file to flash. Full credit to poulainpi for that functionality:  https://github.com/poulainpi/oryx-with-custom-qmk
+Hey! This repo combines my ZSA Moonlander's online Oryx layout with custom QMK firmware, a custom Windhawk mod, and CopyQ text tools. The Oryx web configurator is limited so I supplemented it with custom code. The additions:
+
+- A 12-note chromatic MIDI piano layer
+- Hebrew/English language-aware RGB (requires the accompanying Windhawk mod)
+- Smart Title Case and case switching functionality (requires the accompanying CopyQ commands)
+- A language correction feature that transplaces Hebrew characters with their English equivalent on a QWERTY layout, and vice versa (requires CopyQ). This fixes the problem of typing an entire English sentence only to discover that Hebrew characters were active.
+- Some custom keys and functions; for example, quickly double tapping the right space key outputs ". " just like on my mobile phone
+
+The beauty of this setup is that it uses CI to build everything automatically, merging Oryx and my custom code cleanly and outputting a compiled `.bin` file to flash. Full credit to poulainpi for that functionality: https://github.com/poulainpi/oryx-with-custom-qmk
 
 Open https://configure.zsa.io/moonlander/layouts/3aMQz/latest/0 to see the base layout — most custom keys have peach-colored labels that mark function-key placeholders which get replaced with real behavior by the patch script after the firmware builds.
 
@@ -19,11 +21,11 @@ Advanced MIDI keyboard, language-aware RGB, and Windows text automation — mana
 This repository provides custom QMK firmware for the ZSA Moonlander keyboard, combining:
 
 - **Layer-0 Keymap**: Modified QWERTY with dual-function thumb keys, 3 tap-dances, and F-key placeholders for Windows text automation
-- **MIDI Engine (Layer 2)**: A 26-note polyphonic MIDI controller featuring independent melody/bass splits and a dynamic thumb-controlled transpose shifter
 - **Language-Aware RGB**: Hebrew/English indicator with Windows sync
-- **Windhawk Companion**: Windows-side text automation (wrong-language fixer, case cycler)
+- **CopyQ Text Tools**: Clipboard-protected Smart Title Case, case cycling, and Hebrew/English transplantation
+- **Windhawk Companion**: Windows language switching and Hebrew/English RGB synchronization
 - **CI/CD Pipeline**: Automated Oryx → patch → build → release workflow
-
+- **MIDI Engine (Layer 2)**: A 26-note polyphonic MIDI controller featuring independent melody/bass splits and a dynamic thumb-controlled transpose shifter
 
 The key innovation: Oryx (ZSA's online layout editor) has no native MIDI support. Instead of manually maintaining merge-conflict-prone `keymap.c` files, this project downloads fresh Oryx source in CI, runs `scripts/patch_keymap.py` to inject custom code, builds via Docker, and publishes `.bin` firmware. **No merge conflicts. Only custom code is tracked.**
 
@@ -33,15 +35,16 @@ Use this table at a glance when adding a new function:
 
 | F-key | Status | Notes |
 |---|---|---|
-| **F13**, **F14**, **F15**, **F16**, **F17** | **Free** | No standard OS/browser shortcuts |
+| **F14**, **F15**, **F16**, **F17** | **Free** | No standard OS/browser shortcuts |
 | **F20**, **F21**, **F23** | **Free** | No standard OS/browser shortcuts |
 | F1–F12 | Reserved | Layer 1 function row (also all have standard OS/browser shortcuts for refresh, search, fullscreen, etc.) |
 | F18 | Reserved | Language switch — wired to the left-thumb tap-dance key (k40) and Windhawk |
-| F19 | Reserved | Case cycler hotkey — tap of the Shift+Ctrl mod-tap (k52) |
-| F22 | Reserved | Wrong-language fixer hotkey — tap of RCtrl mod-tap (k51) |
+| F13 | Reserved | CopyQ Smart Title Case — right-space triple tap |
+| F19 | Reserved | CopyQ upper/lower toggle — left-space triple tap |
+| F22 | Reserved | CopyQ Hebrew/English transplantation — language-key double tap |
 | F24 | Reserved | Period-space shortcut (DUAL_FUNC_3, Layer 3 right-hand dual-function key) |
 
-The 8 free keys above (`F13`–`F17`, `F20`, `F21`, `F23`) are the only F-keys that are neither mapped in the firmware nor occupied by common browser/OS shortcuts — safe to assign a new Windhawk hotkey or other custom function.
+The 7 free keys above (`F14`–`F17`, `F20`, `F21`, `F23`) are neither mapped in firmware nor assigned to these host tools.
 
 ## Project Structure
 
@@ -51,8 +54,11 @@ Working-Oryx-QMK-Sync/
 │   └── custom_code.c         ← MIDI bass shifter, language RGB, tap-dance handlers
 ├── scripts/                  ← Python patching engine
 │   └── patch_keymap.py       ← 11+ deterministic transformations injected into Oryx source
-├── host_tools/windhawk/      ← Windows Windhawk mod (v1.2.8)
-│   └── moonlander_language_sync.wh.cpp  ← F18/F19/F22 hotkeys, clipboard automation
+├── host_tools/copyq/         ← CopyQ transformations, protected transaction, installer, tests
+├── host_tools/reselect/      ← .NET 10 grapheme-aware reselection helper
+├── host_tools/windhawk/      ← Windows Windhawk mod (v2.0.0)
+│   ├── moonlander_language_sync.wh.cpp  ← F18 language switching + RGB sync only
+│   └── deprecated/           ← Preserved v1.2.8 F19/F22 rollback source; do not delete on merge
 ├── .github/workflows/        ← CI: fetch Oryx → patch → build → release
 │   └── fetch-and-build-layout.yml
 ├── 3aMQz/                    ← Auto-synced patched layout snapshot (committed by workflow)
@@ -67,7 +73,7 @@ Working-Oryx-QMK-Sync/
 
 ### 1. Base Layer Keymap (Layer 0)
 
-A modified QWERTY layout with dual-function thumb keys (managed in Oryx, snapshot at `3aMQz/keymap.c`). Function keys F18/F19/F22 are mapped in Oryx for Windhawk to intercept.
+A modified QWERTY layout with dual-function thumb keys (managed in Oryx, snapshot at `3aMQz/keymap.c`). F18 is owned by Windhawk; F13/F19/F22 selected-text actions are owned by CopyQ.
 
 #### Row 0 (k00–k0d, 14 keys)
 
@@ -110,19 +116,21 @@ A modified QWERTY layout with dual-function thumb keys (managed in Oryx, snapsho
 | **DANCE_0** `Gui` `Alt` `[` `]` `MT(RAlt,Tab)` | **DUAL_FUNC_2** `'` `/` `←` `↓` `→` |
 
 - `MT(RAlt, Tab)`: Hold Right Alt, tap Tab.
-- **DANCE_0** (language key): single tap → `F18` (triggers Windows language switch + RGB sync), hold → `LeftCtrl`, double tap → `F18`, more taps → additional F18 presses
+- **DANCE_0** (language key): single tap → `F18`, hold → `LeftCtrl`, double tap → `F22` transplantation, triple tap → no action
 - **DUAL_FUNC_2** (custom override): tap → `ENTER`, hold → `SHIFT+ENTER`
 
 #### Row 5 — Thumb Cluster (k50–k55, 6 keys)
 
 | Left cluster | Right cluster |
 |---|---|
-| **DANCE_1** `MT(RCtrl,F22)` `MT(Shift+Ctrl,F19)` | `Delete` `Backspace` **DANCE_2** |
+| **DANCE_1** `MT(RCtrl,NO)` `MT(Shift+Ctrl,NO)` | `Delete` `Backspace` **DANCE_2** |
 
-- `MT(RCtrl, F22)`: Hold = Right Ctrl, **tap = F22** (Windhawk wrong-language fixer)
-- `MT(Shift+Ctrl, F19)`: Hold = Left Shift + Left Ctrl, **tap = F19** (Windhawk case cycler)
-- **DANCE_1** (left space/caps): single tap → `SPACE`, hold → `LEFT_SHIFT` (hold-preferences when interrupted), double tap → `CAPS LOCK`, double-single-tap → `CAPS LOCK`
-- **DANCE_2** (right space/numdot): single tap → `SPACE`, hold → `SPACE`, double tap → `KP_DOT + SPACE` (period-space shortcut)
+- `MT(RCtrl, NO)`: Hold = Right Ctrl; taps do nothing.
+- `MT(Shift+Ctrl, NO)`: Hold = Left Shift + Left Ctrl; taps do nothing.
+- **DANCE_1** (left space/caps): single tap → `SPACE`, hold → `LEFT_SHIFT`, double tap → `CAPS LOCK`, released triple tap → `F19`
+- **DANCE_2** (right space/numdot): single tap → `SPACE`, hold → `SPACE`, double tap → `KP_DOT + SPACE`, released triple tap → `F13`
+
+A held third tap and four-or-more taps intentionally perform no action. Oryx normally generates “repeat the ordinary tap three times” callbacks because its generic tap-dance exporter has no custom semantic for count 3; the patcher disables that fallback for the language dance and both space dances. Only the two space dances receive triple-tap actions.
 
 #### Per-Key Tapping Term Overrides
 
@@ -150,62 +158,40 @@ In future I will probably change things around so the entire base layer changes 
 - `SINGLE_HOLD` → `SINGLE_TAP` fallback
 - `DOUBLE_SINGLE_TAP` → `DOUBLE_TAP`
 - Hold-preference on Space/Shift and F18 language dances
+- Signature-detected space-key triple taps for F19/F13, with build failure if any target cannot be identified safely
 
-### 4. Windhawk Mod (Windows)
+### 4. Windows Host Tools: CopyQ + Windhawk
 
-The Windhawk companion mod (`moonlander_language_sync.wh.cpp` v1.2.8) handles background Windows language state synchronization and manages three main keyboard shortcuts:
+Host-key ownership is deliberately split:
 
-| Hotkey | Source in firmware | Function |
-|---|---|---|
-| **F18** | DANCE_0 (left-thumb language key) | Language-switch (Win+Space / Alt+Shift / Ctrl+Shift) |
-| **F22** | k51 (tap of RCtrl mod-tap) | Wrong-language fixer — translates characters between Hebrew and English physical layouts in place |
-| **F19** | k52 (tap of Shift+Ctrl mod-tap) | Case cycler — lower → UPPER → Title → lower |
+| Hotkey | Firmware sources | Owner | Function |
+|---|---|---|---|
+| **F13** | Right-space triple tap | CopyQ | Smart Title Case; finishes unselected with caret at end |
+| **F18** | Language-key single tap | Windhawk | Windows language switch |
+| **F19** | Left-space triple tap | CopyQ | `lower ↔ UPPER`; mixed case → `UPPER`; remains selected |
+| **F22** | Language-key double tap | CopyQ | Hebrew/English physical-key transplantation; finishes unselected |
 
-The mod also syncs Windows input language to keyboard RGB over RAW HID (polled ~120 ms).
+Smart Title Case uses the configured small-word list (`a, an, and, as, at, but, by, for, in, nor, of, on, or, per, so, the, to, up, via, vs, yet`), while always capitalizing the first/last lexical word and the first word after a colon or dash. Ordinary words are normalized; acronym detection is intentionally omitted.
 
-**Currently reserved F-keys on this keyboard** (changing any of these means updating the Windhawk mod and the matching Oryx key binding):
+Transplantation follows Microsoft `kbdhebl3` physical positions. Direction is chosen by the predominant recognizable alphabet. Lowercase English is mapped to Hebrew, uppercase `A–Z` is preserved, Hebrew maps back to lowercase English, and alphabet ties are no-ops. This preserves the useful pattern where an initial shifted English capital survives while the following accidental lowercase English becomes Hebrew.
 
-| Used F-key | Firmware source | Used for |
-|---|---|---|
-| F1–F12 | Layer 1, Row 0 | Standard function row |
-| F18 | DANCE_0 (k40, left thumb) | Language switch (Windows) |
-| F19 | k52 tap (`MT(Shift+Ctrl, F19)`) | Case cycler (Windhawk) |
-| F22 | k51 tap (`MT(RCtrl, F22)`) | Wrong-language fixer (Windhawk) |
-| F24 | DUAL_FUNC_3 (Layer 3, right hand) | Period-space shortcut |
+CopyQ performs each transformation as a protected transaction: it snapshots every clipboard MIME format, disables history storage, captures and pastes the selection, restores monitoring immediately, then restores the original clipboard only if no newer copy has replaced the generated text. The .NET helper used by F19 receives UTF-8 text over standard input, counts Unicode grapheme clusters, and reselects with the caret at the right edge. It has no clipboard, network, administrator, tray, or persistent-process access.
 
-**Wrong-language fixer**: Uses the Microsoft kbdhebl3 (Hebrew Standard) layout. Hebrew has no case, so transcription defaults to lowercase. Use F19 to cycle case afterward.
+See [`host_tools/copyq/README.md`](host_tools/copyq/README.md) for build, staged installation, activation, acceptance checks, and rollback.
 
-**Case cycler**: After pasting, the text stays highlighted so F19 can be pressed again to keep cycling.
+#### <a id="windhawk-setup"></a>Windhawk Setup
 
-#### <a id="windhawk-setup"></a>Windhawk Mod Setup
+The v2 Windhawk source owns only F18 and RGB synchronization. Install or update it from `host_tools/windhawk/moonlander_language_sync.wh.cpp`, then use:
 
-**1. Oryx configuration** — the firmware already exposes the three hotkeys as documented above. No extra Oryx mapping is needed.
+- `enableF18Hotkey = true`
+- `shortcutMode = 1` (Win+Space), `2` (Alt+Shift), `3` (Ctrl+Shift), or `0` (none)
+- `pollIntervalMs = 120`
+- `onlyMoonlander = true`
 
-**2. Build and flash** — trigger **Actions → Fetch and build layout** on GitHub and flash the resulting `.bin` via Wally or ZSA Keymapp.
+The previous v1.2.8 implementation is preserved under `host_tools/windhawk/deprecated/` and marked deprecated. It must remain available as the immediate rollback during and after merge; do not enable it simultaneously with active CopyQ F19/F22 shortcuts.
 
-**3. Install the mod**
-1. Install [Windhawk](https://windhawk.net/) (Windows only).
-2. Create a new mod and paste `host_tools/windhawk/moonlander_language_sync.wh.cpp`.
-3. Build and enable the mod.
-4. Default recommended settings:
-   - `enableF18Hotkey = true`
-   - `shortcutMode = 1` (Win+Space)
-   - `enableF22Hotkey = true`
-   - `enableF19Hotkey = true`
-   - `pollIntervalMs = 120`
-   - `onlyMoonlander = true`
+Windhawk sends an Oryx-native RAW HID command to sync Windows language state to keyboard RGB:
 
-**4. Verify**
-1. Tap the left-thumb language tap-dance key (DANCE_0 / k40):
-   - Windows should switch language (per your chosen shortcut mode).
-   - The same key's RGB indicator should instantly reflect the new state.
-2. Select Hebrew-typed text (or English-typed text) and press k51 (F22):
-   - Text is replaced with characters flipped to the other alphabet by physical key position.
-3. Select any text and press k52 (F19):
-   - Case cycles through `lower` → `UPPER` → `Title` → `lower`.
-4. After a paste, the pasted text stays highlighted so F19 can be pressed again to keep cycling.
-
-**5. Protocol reference** — Windhawk sends an Oryx-native RAW HID command to sync Windows language state to keyboard RGB:
 - Command: `ORYX_STATUS_LED_CONTROL` (`0x0A`)
 - Payload: `param[0] = 0x00` (English), `0x01` (Hebrew)
 - Transport: raw HID output report to any ZSA Moonlander device (filtered by manufacturer + product string)
@@ -213,7 +199,8 @@ The mod also syncs Windows input language to keyboard RGB over RAW HID (polled ~
 
 The language RGB indicator only responds on Layer 0; MIDI and other layers use Oryx-configured per-layer colors.
 
-**6. Troubleshooting**
+Troubleshooting:
+
 - Language switches but RGB does not update: set `debugLogging = true` and check Windhawk's log; temporarily set `onlyMoonlander = false` to test broader HID matching.
 - F18 should not trigger Windows language shortcut: set `enableF18Hotkey = false`. Keyboard-side RGB sync still runs.
 - Different Windows shortcut preferred: `shortcutMode` = `1` Win+Space (recommended), `2` Alt+Shift, `3` Ctrl+Shift, `0` None.
@@ -357,11 +344,11 @@ Investigation of QMK source confirmed:
 
 **Decision**: Use MIDI_ADVANCED (strict superset; future-proof). The bass shifter forwards a transposed note keycode to `process_midi()`, keeping the per-key snapshot so press/release use the same shifted keycode (no stuck notes).
 
-### Why F19/F22 for Windhawk (and not F13–F17)?
+### Why F13/F19/F22 for CopyQ?
 
-Global Windhawk hotkeys must use scancodes not already reserved by the firmware (see [F-key Availability Quick Reference](#fkey-ref) at the top). The free band is `F13`–`F17`, `F19`, `F20`, `F21`, `F22`, `F23`. `F19` and `F22` were chosen because the firmware already emits those codes on the keys that feel natural for text automation (`MT(Shift+Ctrl, F19)` and `MT(RCtrl, F22)` in the thumb cluster) — no Oryx remapping required.
+`F19` is emitted only by the left-space triple tap. `F22` is emitted only by the language-key double tap. The two adjacent modifier-only thumb keys use `KC_NO` as their tap action, so tapping or double tapping them does nothing. `F13` is assigned to right-space Smart Title Case. CopyQ owns all three selected-text hotkeys so they share one protected clipboard transaction.
 
-`F18` is also shared intentionally — the keyboard's language tap-dance emits `F18`, which is exactly the hotkey Windhawk needs for the Windows language switch, so both sides agree automatically.
+`F18` remains separate because it is not a selected-text action: Windhawk converts it to the configured Windows language shortcut and synchronizes RGB state.
 
 ### Why preserve-by-default for Layer 2?
 
@@ -372,9 +359,16 @@ The original patch script replaced the entire Layer 2 keymap, which erased user-
 ### Windhawk mod not working
 
 - Ensure Windhawk is installed and the mod is enabled
-- Check that F18/F19/F22 are mapped as DANCE_0 (left thumb) and the thumb-cluster mod-taps (k51, k52)
+- Check that F18 is emitted by DANCE_0 (left thumb)
 - The mod polls language state every ~120ms; rapid switching may lag
 - The mod targets `explorer.exe`; if another app has focus the window-level shortcut may not fire
+
+### CopyQ text tools not working
+
+- Confirm CopyQ is running and the three exact `Moonlander:` commands are enabled.
+- If F19 or F22 cannot be registered, update the installed Windhawk mod to v2 before activating CopyQ shortcuts; the old mod owns those keys.
+- Stage without shortcuts first and run each command manually from CopyQ.
+- Do not invoke a transformation without selected text in a terminal where `Ctrl+C` would interrupt a process.
 
 ### MIDI notes sound one octave too high
 
