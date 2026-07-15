@@ -5,7 +5,7 @@ These commands transform selected text without leaving the selection in CopyQ hi
 | Command | Shortcut | Result |
 |---|---|---|
 | `Moonlander: Smart Title Case` | F13 | Smart title rules; caret at end, unselected |
-| `Moonlander: Cycle Case` | F19 | lower → UPPER → Smart Title → lower; selected with caret at right |
+| `Moonlander: Cycle Case` | F19 | lower ↔ UPPER only; selected with caret at right |
 | `Moonlander: Transplant Hebrew-English` | F22 | Physical-key transplantation; caret at end, unselected |
 
 Commands require selected text. CopyQ must issue `Ctrl+C` to capture it, so avoid invoking a command without a selection in a terminal where `Ctrl+C` interrupts a process.
@@ -52,20 +52,21 @@ host_tools/reselect/Moonlander.Reselect/bin/Release/net10.0-windows/win-x64/publ
 
    Activation fails if an unrelated CopyQ command already owns F13, F19, or F22. It never silently replaces a collision.
 
-5. Verify the dedicated F19/F22 keys before flashing firmware. Then build and flash the firmware and verify the three triple taps.
+5. Build and flash the firmware. Verify language-key double tap (`F22`) and the two space-key triple taps (`F19`/`F13`).
 
 The installer is idempotent and makes a fresh backup on every run. Use `-WhatIf` to inspect the target without modifying CopyQ.
 
 ## Acceptance checks
 
 - `the lord of the rings` becomes `The Lord of the Rings`.
-- F19 cycles lowercase → uppercase → Smart Title → lowercase; mixed case starts at uppercase.
+- F19 toggles lowercase ↔ uppercase; mixed case starts at uppercase.
 - F19 leaves multiline and emoji-containing text selected with the caret at the right edge.
 - `Hello` transplantation preserves `H` and transforms only `ello`.
 - Hebrew becomes lowercase English; punctuation follows `kbdhebl3` physical positions.
 - Empty, punctuation-only, and alphabet-tie input is unchanged.
 - A new clipboard copy made during the delayed restore is not overwritten.
-- Twenty repetitions of each triple tap produce one action per triple and preserve single/hold/double behavior.
+- Twenty repetitions of each space-key triple tap produce one action per triple and preserve single/hold/double behavior.
+- The language key taps `F18`, holds Left Ctrl, double taps `F22`, and has no triple-tap action.
 
 ## Rollback
 

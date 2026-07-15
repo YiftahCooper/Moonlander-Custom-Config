@@ -73,14 +73,7 @@
     if (lower === upper) {
       return source;
     }
-    if (source === lower) {
-      return upper;
-    }
     if (source === upper) {
-      var title = smartTitleCase(lower);
-      return title === upper ? lower : title;
-    }
-    if (source === smartTitleCase(lower)) {
       return lower;
     }
     return upper;

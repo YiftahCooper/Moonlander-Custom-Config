@@ -26,21 +26,19 @@ test('smart title case preserves apostrophes while normalizing ordinary words', 
   assert.equal(smartTitleCase("THE ART OF DON'T PANIC"), "The Art of Don't Panic");
 });
 
-test('case cycle is lower to upper to smart title to lower', () => {
+test('case toggle switches only between lower and upper', () => {
   const lower = 'the lord of the rings';
   const upper = 'THE LORD OF THE RINGS';
-  const title = 'The Lord of the Rings';
 
   assert.equal(cycleCase(lower), upper);
-  assert.equal(cycleCase(upper), title);
-  assert.equal(cycleCase(title), lower);
+  assert.equal(cycleCase(upper), lower);
 });
 
 test('mixed or unknown case defaults to uppercase', () => {
   assert.equal(cycleCase('tHe lord OF the rings'), 'THE LORD OF THE RINGS');
 });
 
-test('case cycle skips an indistinguishable title stage instead of stalling', () => {
+test('single-letter uppercase toggles to lowercase', () => {
   assert.equal(cycleCase('A'), 'a');
   assert.equal(cycleCase('A B'), 'a b');
 });

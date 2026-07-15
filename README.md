@@ -40,8 +40,8 @@ Use this table at a glance when adding a new function:
 | F1–F12 | Reserved | Layer 1 function row (also all have standard OS/browser shortcuts for refresh, search, fullscreen, etc.) |
 | F18 | Reserved | Language switch — wired to the left-thumb tap-dance key (k40) and Windhawk |
 | F13 | Reserved | CopyQ Smart Title Case — right-space triple tap |
-| F19 | Reserved | CopyQ case cycler — left-space triple tap and dedicated k52 tap |
-| F22 | Reserved | CopyQ Hebrew/English transplantation — language-key triple tap and dedicated k51 tap |
+| F19 | Reserved | CopyQ upper/lower toggle — left-space triple tap |
+| F22 | Reserved | CopyQ Hebrew/English transplantation — language-key double tap |
 | F24 | Reserved | Period-space shortcut (DUAL_FUNC_3, Layer 3 right-hand dual-function key) |
 
 The 7 free keys above (`F14`–`F17`, `F20`, `F21`, `F23`) are neither mapped in firmware nor assigned to these host tools.
@@ -116,21 +116,21 @@ A modified QWERTY layout with dual-function thumb keys (managed in Oryx, snapsho
 | **DANCE_0** `Gui` `Alt` `[` `]` `MT(RAlt,Tab)` | **DUAL_FUNC_2** `'` `/` `←` `↓` `→` |
 
 - `MT(RAlt, Tab)`: Hold Right Alt, tap Tab.
-- **DANCE_0** (language key): single tap → `F18`, hold → `LeftCtrl`, double tap → `F18`, released triple tap → `F22` transplantation
+- **DANCE_0** (language key): single tap → `F18`, hold → `LeftCtrl`, double tap → `F22` transplantation, triple tap → no action
 - **DUAL_FUNC_2** (custom override): tap → `ENTER`, hold → `SHIFT+ENTER`
 
 #### Row 5 — Thumb Cluster (k50–k55, 6 keys)
 
 | Left cluster | Right cluster |
 |---|---|
-| **DANCE_1** `MT(RCtrl,F22)` `MT(Shift+Ctrl,F19)` | `Delete` `Backspace` **DANCE_2** |
+| **DANCE_1** `MT(RCtrl,NO)` `MT(Shift+Ctrl,NO)` | `Delete` `Backspace` **DANCE_2** |
 
-- `MT(RCtrl, F22)`: Hold = Right Ctrl, **tap = F22** (CopyQ transplantation)
-- `MT(Shift+Ctrl, F19)`: Hold = Left Shift + Left Ctrl, **tap = F19** (CopyQ case cycle)
+- `MT(RCtrl, NO)`: Hold = Right Ctrl; taps do nothing.
+- `MT(Shift+Ctrl, NO)`: Hold = Left Shift + Left Ctrl; taps do nothing.
 - **DANCE_1** (left space/caps): single tap → `SPACE`, hold → `LEFT_SHIFT`, double tap → `CAPS LOCK`, released triple tap → `F19`
 - **DANCE_2** (right space/numdot): single tap → `SPACE`, hold → `SPACE`, double tap → `KP_DOT + SPACE`, released triple tap → `F13`
 
-A held third tap and four-or-more taps intentionally perform no action. Oryx normally generates “repeat the ordinary tap three times” callbacks because its generic tap-dance exporter has no custom semantic for count 3; the patcher disables that fallback only for these three dances.
+A held third tap and four-or-more taps intentionally perform no action. Oryx normally generates “repeat the ordinary tap three times” callbacks because its generic tap-dance exporter has no custom semantic for count 3; the patcher disables that fallback for the language dance and both space dances. Only the two space dances receive triple-tap actions.
 
 #### Per-Key Tapping Term Overrides
 
@@ -158,7 +158,7 @@ In future I will probably change things around so the entire base layer changes 
 - `SINGLE_HOLD` → `SINGLE_TAP` fallback
 - `DOUBLE_SINGLE_TAP` → `DOUBLE_TAP`
 - Hold-preference on Space/Shift and F18 language dances
-- Signature-detected triple taps for F22/F19/F13, with build failure if any target cannot be identified safely
+- Signature-detected space-key triple taps for F19/F13, with build failure if any target cannot be identified safely
 
 ### 4. Windows Host Tools: CopyQ + Windhawk
 
@@ -167,9 +167,9 @@ Host-key ownership is deliberately split:
 | Hotkey | Firmware sources | Owner | Function |
 |---|---|---|---|
 | **F13** | Right-space triple tap | CopyQ | Smart Title Case; finishes unselected with caret at end |
-| **F18** | Language-key single/double tap | Windhawk | Windows language switch |
-| **F19** | Left-space triple tap and k52 tap | CopyQ | `lower → UPPER → Smart Title → lower`; mixed case → `UPPER`; remains selected |
-| **F22** | Language-key triple tap and k51 tap | CopyQ | Hebrew/English physical-key transplantation; finishes unselected |
+| **F18** | Language-key single tap | Windhawk | Windows language switch |
+| **F19** | Left-space triple tap | CopyQ | `lower ↔ UPPER`; mixed case → `UPPER`; remains selected |
+| **F22** | Language-key double tap | CopyQ | Hebrew/English physical-key transplantation; finishes unselected |
 
 Smart Title Case uses the configured small-word list (`a, an, and, as, at, but, by, for, in, nor, of, on, or, per, so, the, to, up, via, vs, yet`), while always capitalizing the first/last lexical word and the first word after a colon or dash. Ordinary words are normalized; acronym detection is intentionally omitted.
 
@@ -346,7 +346,7 @@ Investigation of QMK source confirmed:
 
 ### Why F13/F19/F22 for CopyQ?
 
-`F19` and `F22` already exist on the thumb-cluster mod-taps, so the dedicated triggers remain useful. Triple taps reuse those contracts on the left-space and language dances. `F13` was free and is assigned to right-space Smart Title Case. CopyQ owns all three so selected-text transformations share one protected clipboard transaction.
+`F19` is emitted only by the left-space triple tap. `F22` is emitted only by the language-key double tap. The two adjacent modifier-only thumb keys use `KC_NO` as their tap action, so tapping or double tapping them does nothing. `F13` is assigned to right-space Smart Title Case. CopyQ owns all three selected-text hotkeys so they share one protected clipboard transaction.
 
 `F18` remains separate because it is not a selected-text action: Windhawk converts it to the configured Windows language shortcut and synchronizes RGB state.
 
