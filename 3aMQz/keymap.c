@@ -239,6 +239,7 @@ enum {
     DOUBLE_TAP,          
     DOUBLE_HOLD,         
     DOUBLE_SINGLE_TAP,   
+    TRIPLE_TAP, /* ORYX_TEXT_TOOLS_TRIPLE_ENUM_PATCH */
     MORE_TAPS            
 };
 
@@ -249,11 +250,14 @@ uint8_t dance_step(tap_dance_state_t *state);
 uint8_t dance_step(tap_dance_state_t *state) {
     if (state->count == 1) {
         if (state->interrupted || !state->pressed) return SINGLE_TAP;
-        else return SINGLE_HOLD;
+        return SINGLE_HOLD;
     } else if (state->count == 2) {
         if (state->interrupted) return DOUBLE_SINGLE_TAP;
-        else if (state->pressed) return DOUBLE_HOLD;
-        else return DOUBLE_TAP;
+        if (state->pressed) return DOUBLE_HOLD;
+        return DOUBLE_TAP;
+    } else if (state->count == 3) {
+        if (state->interrupted || !state->pressed) return TRIPLE_TAP; /* ORYX_TEXT_TOOLS_TRIPLE_STEP_PATCH */
+        return MORE_TAPS;
     }
     return MORE_TAPS;
 }
@@ -264,14 +268,9 @@ void dance_0_finished(tap_dance_state_t *state, void *user_data);
 void dance_0_reset(tap_dance_state_t *state, void *user_data);
 
 void on_dance_0(tap_dance_state_t *state, void *user_data) {
-    if(state->count == 3) {
-        tap_code16(KC_F18);
-        tap_code16(KC_F18);
-        tap_code16(KC_F18);
-    }
-    if(state->count > 3) {
-        tap_code16(KC_F18);
-    }
+    // Multi-tap actions are resolved only by dance_step().
+    (void)state;
+    (void)user_data; /* ORYX_TEXT_TOOLS_TRIPLE_ON_DANCE_PATCH */
 }
 
 void dance_0_finished(tap_dance_state_t *state, void *user_data) {
@@ -285,6 +284,7 @@ void dance_0_finished(tap_dance_state_t *state, void *user_data) {
         case SINGLE_HOLD: register_code16(KC_LEFT_CTRL); break;
         case DOUBLE_TAP: register_code16(KC_F18); break; /* ORYX_LANG_F18_DOUBLETAP_PATCH */
         case DOUBLE_SINGLE_TAP: register_code16(KC_F18); break; /* ORYX_LANG_F18_DOUBLETAP_PATCH */
+        case TRIPLE_TAP: tap_code16(KC_F22); break; /* ORYX_TEXT_TOOLS_TRIPLE_ACTION_PATCH_F22 */
 }
 }
 
@@ -295,6 +295,7 @@ void dance_0_reset(tap_dance_state_t *state, void *user_data) {
         case SINGLE_HOLD: unregister_code16(KC_LEFT_CTRL); break;
         case DOUBLE_TAP: unregister_code16(KC_F18); break; /* ORYX_LANG_F18_DOUBLETAP_PATCH */
         case DOUBLE_SINGLE_TAP: unregister_code16(KC_F18); break; /* ORYX_LANG_F18_DOUBLETAP_PATCH */
+        case TRIPLE_TAP:  break; /* ORYX_TEXT_TOOLS_TRIPLE_ACTION_PATCH_F22 */
 }
     dance_state[0].step = 0;
 }
@@ -303,14 +304,9 @@ void dance_1_finished(tap_dance_state_t *state, void *user_data);
 void dance_1_reset(tap_dance_state_t *state, void *user_data);
 
 void on_dance_1(tap_dance_state_t *state, void *user_data) {
-    if(state->count == 3) {
-        tap_code16(KC_SPACE);
-        tap_code16(KC_SPACE);
-        tap_code16(KC_SPACE);
-    }
-    if(state->count > 3) {
-        tap_code16(KC_SPACE);
-    }
+    // Multi-tap actions are resolved only by dance_step().
+    (void)state;
+    (void)user_data; /* ORYX_TEXT_TOOLS_TRIPLE_ON_DANCE_PATCH */
 }
 
 void dance_1_finished(tap_dance_state_t *state, void *user_data) {
@@ -324,6 +320,7 @@ void dance_1_finished(tap_dance_state_t *state, void *user_data) {
         case SINGLE_HOLD: register_code16(KC_LEFT_SHIFT); break;
         case DOUBLE_TAP: register_code16(KC_CAPS); break;
         case DOUBLE_SINGLE_TAP: register_code16(KC_CAPS); break; /* ORYX_DOUBLETAP_FALLBACK_PATCH */
+        case TRIPLE_TAP: tap_code16(KC_F19); break; /* ORYX_TEXT_TOOLS_TRIPLE_ACTION_PATCH_F19 */
 }
 }
 
@@ -334,6 +331,7 @@ void dance_1_reset(tap_dance_state_t *state, void *user_data) {
         case SINGLE_HOLD: unregister_code16(KC_LEFT_SHIFT); break;
         case DOUBLE_TAP: unregister_code16(KC_CAPS); break;
         case DOUBLE_SINGLE_TAP: unregister_code16(KC_CAPS); break; /* ORYX_DOUBLETAP_FALLBACK_PATCH */
+        case TRIPLE_TAP:  break; /* ORYX_TEXT_TOOLS_TRIPLE_ACTION_PATCH_F19 */
 }
     dance_state[1].step = 0;
 }
@@ -342,14 +340,9 @@ void dance_2_finished(tap_dance_state_t *state, void *user_data);
 void dance_2_reset(tap_dance_state_t *state, void *user_data);
 
 void on_dance_2(tap_dance_state_t *state, void *user_data) {
-    if(state->count == 3) {
-        tap_code16(KC_SPACE);
-        tap_code16(KC_SPACE);
-        tap_code16(KC_SPACE);
-    }
-    if(state->count > 3) {
-        tap_code16(KC_SPACE);
-    }
+    // Multi-tap actions are resolved only by dance_step().
+    (void)state;
+    (void)user_data; /* ORYX_TEXT_TOOLS_TRIPLE_ON_DANCE_PATCH */
 }
 
 void dance_2_finished(tap_dance_state_t *state, void *user_data) {
@@ -359,6 +352,7 @@ void dance_2_finished(tap_dance_state_t *state, void *user_data) {
         case SINGLE_HOLD: register_code16(KC_SPACE); break; /* ORYX_TAPHOLD_FALLBACK_PATCH */
         case DOUBLE_TAP: tap_code16(KC_KP_DOT); tap_code16(KC_SPACE); break; /* ORYX_FN24_NUMDOT_SPACE_PATCH */
         case DOUBLE_SINGLE_TAP: tap_code16(KC_KP_DOT); tap_code16(KC_SPACE); break; /* ORYX_FN24_NUMDOT_SPACE_PATCH */
+        case TRIPLE_TAP: tap_code16(KC_F13); break; /* ORYX_TEXT_TOOLS_TRIPLE_ACTION_PATCH_F13 */
 }
 }
 
@@ -369,6 +363,7 @@ void dance_2_reset(tap_dance_state_t *state, void *user_data) {
         case SINGLE_HOLD: unregister_code16(KC_SPACE); break; /* ORYX_TAPHOLD_FALLBACK_PATCH */
         case DOUBLE_TAP: break; /* ORYX_FN24_NUMDOT_SPACE_PATCH */
         case DOUBLE_SINGLE_TAP: break; /* ORYX_FN24_NUMDOT_SPACE_PATCH */
+        case TRIPLE_TAP:  break; /* ORYX_TEXT_TOOLS_TRIPLE_ACTION_PATCH_F13 */
 }
     dance_state[2].step = 0;
 }

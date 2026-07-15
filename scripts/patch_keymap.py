@@ -20,6 +20,10 @@ TAPHOLD_COMPAT_MARKER = "ORYX_TAPHOLD_FALLBACK_PATCH"
 DOUBLETAP_COMPAT_MARKER = "ORYX_DOUBLETAP_FALLBACK_PATCH"
 SPACESHIFT_HOLD_PREF_MARKER = "ORYX_SPACESHIFT_HOLD_PREF_PATCH"
 SPACE_DOT_TERM_MARKER = "ORYX_SPACE_DOT_TERM_PATCH"
+TRIPLE_TAP_ENUM_MARKER = "ORYX_TEXT_TOOLS_TRIPLE_ENUM_PATCH"
+TRIPLE_TAP_STEP_MARKER = "ORYX_TEXT_TOOLS_TRIPLE_STEP_PATCH"
+TRIPLE_TAP_ON_DANCE_MARKER = "ORYX_TEXT_TOOLS_TRIPLE_ON_DANCE_PATCH"
+TRIPLE_TAP_ACTION_MARKER = "ORYX_TEXT_TOOLS_TRIPLE_ACTION_PATCH"
 LANGUAGE_SWITCH_TAPPING_TERM_MS = 2000
 SPACE_DOT_TERM_SCALE_NUM = 6
 SPACE_DOT_TERM_SCALE_DEN = 5
@@ -243,6 +247,161 @@ def _discover_dance_indices(content: str) -> list[int]:
         return sorted(indices)
     # Fallback for unexpected source layouts.
     return list(range(0, 24))
+
+
+def _find_unique_dance_by_signature(
+    content: str,
+    dance_indices: list[int],
+    label: str,
+    signature: Callable[[str], bool],
+) -> int:
+    matches = []
+    for dance_idx in dance_indices:
+        body, found = _get_function_body(content, f"dance_{dance_idx}_finished")
+        if found and signature(body):
+            matches.append(dance_idx)
+
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Could not uniquely identify {label} tap dance by behavior signature; "
+            f"found {matches or 'none'}"
+        )
+    return matches[0]
+
+
+def _insert_triple_case(body: str, action: str, marker_suffix: str) -> str:
+    marker = f"{TRIPLE_TAP_ACTION_MARKER}_{marker_suffix}"
+    if marker in body:
+        return body
+
+    switch_close = body.rfind("}")
+    if switch_close == -1:
+        raise RuntimeError("Tap-dance handler has no switch block for TRIPLE_TAP")
+
+    case_indent_match = re.search(r"^(?P<indent>[ \t]*)case\s+SINGLE_TAP\s*:", body, re.MULTILINE)
+    if not case_indent_match:
+        raise RuntimeError("Tap-dance handler has no SINGLE_TAP case")
+    indent = case_indent_match.group("indent")
+    triple_case = f"{indent}case TRIPLE_TAP: {action} break; /* {marker} */\n"
+    return body[:switch_close] + triple_case + body[switch_close:]
+
+
+def _patch_triple_tap_text_tools(content: str) -> tuple[str, dict[str, int]]:
+    """
+    Add deterministic triple-tap host triggers to the three thumb dances.
+
+    Targets are discovered from their single/hold/double behavior, never their
+    generated DANCE_n indices. Generated count==3 repeat callbacks are disabled
+    only for these targets. A held third tap and four-or-more taps resolve to
+    MORE_TAPS, for which these handlers intentionally have no action.
+    """
+    dance_indices = _discover_dance_indices(content)
+    language_idx = _find_unique_dance_by_signature(
+        content,
+        dance_indices,
+        "language/Ctrl",
+        lambda body: (
+            "case SINGLE_TAP:" in body
+            and "KC_F18" in body
+            and "case SINGLE_HOLD: register_code16(KC_LEFT_CTRL);" in body
+        ),
+    )
+    left_space_idx = _find_unique_dance_by_signature(
+        content,
+        dance_indices,
+        "left-space/Shift/Caps Lock",
+        lambda body: (
+            "case SINGLE_TAP: register_code16(KC_SPACE);" in body
+            and "case SINGLE_HOLD: register_code16(KC_LEFT_SHIFT);" in body
+            and "case DOUBLE_TAP: register_code16(KC_CAPS);" in body
+        ),
+    )
+    right_space_idx = _find_unique_dance_by_signature(
+        content,
+        dance_indices,
+        "right-space/period-space",
+        lambda body: (
+            "case SINGLE_TAP: register_code16(KC_SPACE);" in body
+            and "case SINGLE_HOLD: register_code16(KC_SPACE);" in body
+            and "case DOUBLE_TAP:" in body
+            and (
+                "tap_code16(KC_KP_DOT); tap_code16(KC_SPACE);" in body
+                or "KC_F24" in body
+            )
+        ),
+    )
+
+    targets = {
+        "language": language_idx,
+        "left_space": left_space_idx,
+        "right_space": right_space_idx,
+    }
+    if len(set(targets.values())) != 3:
+        raise RuntimeError(f"Triple-tap behavior signatures overlap: {targets}")
+
+    if TRIPLE_TAP_ENUM_MARKER not in content:
+        enum_pattern = re.compile(r"^(?P<indent>[ \t]*)MORE_TAPS(?P<comma>\s*,?)", re.MULTILINE)
+        replacement = (
+            rf"\g<indent>TRIPLE_TAP, /* {TRIPLE_TAP_ENUM_MARKER} */\n"
+            r"\g<indent>MORE_TAPS\g<comma>"
+        )
+        content, replaced = enum_pattern.subn(replacement, content, count=1)
+        if replaced != 1:
+            raise RuntimeError("Could not add TRIPLE_TAP to the Oryx dance-state enum")
+
+    dance_step_body = (
+        "\n"
+        "    if (state->count == 1) {\n"
+        "        if (state->interrupted || !state->pressed) return SINGLE_TAP;\n"
+        "        return SINGLE_HOLD;\n"
+        "    } else if (state->count == 2) {\n"
+        "        if (state->interrupted) return DOUBLE_SINGLE_TAP;\n"
+        "        if (state->pressed) return DOUBLE_HOLD;\n"
+        "        return DOUBLE_TAP;\n"
+        "    } else if (state->count == 3) {\n"
+        f"        if (state->interrupted || !state->pressed) return TRIPLE_TAP; /* {TRIPLE_TAP_STEP_MARKER} */\n"
+        "        return MORE_TAPS;\n"
+        "    }\n"
+        "    return MORE_TAPS;\n"
+    )
+    if not _get_function_body(content, "dance_step")[1]:
+        raise RuntimeError("Could not find Oryx dance_step function")
+    content = _replace_function_body(content, "dance_step", dance_step_body)
+
+    actions = {
+        language_idx: ("tap_code16(KC_F22);", "F22"),
+        left_space_idx: ("tap_code16(KC_F19);", "F19"),
+        right_space_idx: ("tap_code16(KC_F13);", "F13"),
+    }
+    for dance_idx, (action, suffix) in actions.items():
+        on_name = f"on_dance_{dance_idx}"
+        on_body, has_on = _get_function_body(content, on_name)
+        if not has_on:
+            raise RuntimeError(f"Missing generated {on_name} callback")
+        if TRIPLE_TAP_ON_DANCE_MARKER not in on_body:
+            no_op_body = (
+                "\n"
+                "    // Multi-tap actions are resolved only by dance_step().\n"
+                "    (void)state;\n"
+                f"    (void)user_data; /* {TRIPLE_TAP_ON_DANCE_MARKER} */\n"
+            )
+            content = _replace_function_body(content, on_name, no_op_body)
+
+        finished_name = f"dance_{dance_idx}_finished"
+        finished_body, has_finished = _get_function_body(content, finished_name)
+        if not has_finished:
+            raise RuntimeError(f"Missing generated {finished_name} callback")
+        finished_body = _insert_triple_case(finished_body, action, suffix)
+        content = _replace_function_body(content, finished_name, finished_body)
+
+        reset_name = f"dance_{dance_idx}_reset"
+        reset_body, has_reset = _get_function_body(content, reset_name)
+        if not has_reset:
+            raise RuntimeError(f"Missing generated {reset_name} callback")
+        reset_body = _insert_triple_case(reset_body, "", suffix)
+        content = _replace_function_body(content, reset_name, reset_body)
+
+    return content, targets
 
 
 def _replace_case_block(body: str, case_name: str, replacement_builder: Callable[[str], str]) -> tuple[str, bool]:
@@ -1440,6 +1599,17 @@ def patch_keymap(layout_dir: str) -> None:
         print("Patched F18 language dance: hold-preference (Ctrl) + double-tap language switch")
     else:
         print("No F18 language dance found to patch (skipping).")
+
+    # 4c) Add deterministic host text-tool triggers to the three thumb dances.
+    # This is intentionally strict: an Oryx export whose behavior signatures no
+    # longer match must fail rather than risk patching the wrong physical key.
+    content, triple_tap_targets = _patch_triple_tap_text_tools(content)
+    print(
+        "Patched triple-tap text tools: "
+        f"language DANCE_{triple_tap_targets['language']} -> F22, "
+        f"left-space DANCE_{triple_tap_targets['left_space']} -> F19, "
+        f"right-space DANCE_{triple_tap_targets['right_space']} -> F13"
+    )
 
     # 5) For the SPACE/SHIFT dance, prefer hold when interrupted by another key.
     content, spaceshift_hold_pref_patched = _prefer_hold_for_space_shift_dance(content, dance_indices)
