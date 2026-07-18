@@ -80,4 +80,4 @@ Before the firmware cutover, rollback is simply:
 2. Reinstall/re-enable the previous Windhawk source so it owns F19/F22 again.
 
 If the triple-tap firmware is implicated, flash the previously known-good firmware artifact. Restore a CopyQ backup only if command configuration was damaged; normal rollback does not require replacing unrelated commands.
-
+
