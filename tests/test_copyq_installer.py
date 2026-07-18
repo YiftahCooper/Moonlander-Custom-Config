@@ -31,6 +31,13 @@ class CopyQInstallerPowerShellTests(unittest.TestCase):
             self.assertIn(name, self.source)
         self.assertIn("CopyQ command verification failed", self.source)
 
+    def test_installer_reads_back_copyq_14_global_shortcut_lists(self):
+        self.assertIn("command.globalShortcuts", self.source)
+        self.assertNotRegex(self.source, r"command\.globalShortcut(?!s)")
+        for shortcut in ("F13", "F19", "F22"):
+            self.assertIn(shortcut, self.source)
+        self.assertIn("CopyQ shortcut verification failed", self.source)
+
     def test_installer_calls_direct_command_definition_api(self):
         self.assertIn(
             "MoonlanderCommandInstaller.install('$installPathForJavaScript', '$helperPathForJavaScript', $activate)",
