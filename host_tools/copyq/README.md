@@ -36,7 +36,7 @@ host_tools/reselect/Moonlander.Reselect/bin/Release/net10.0-windows/win-x64/publ
    .\host_tools\copyq\Install-MoonlanderTextTools.ps1
    ```
 
-   The installer exports the complete current CopyQ command configuration to `%LOCALAPPDATA%\MoonlanderTextTools\backups`, deploys the scripts/helper under `%LOCALAPPDATA%\MoonlanderTextTools`, and replaces only the three exact `Moonlander:` command names. All unrelated commands are preserved.
+   The installer waits for CopyQ's Windows CLI response, verifies the running instance with a readiness probe, exports the complete current command configuration to `%LOCALAPPDATA%\MoonlanderTextTools\backups`, deploys the scripts/helper under `%LOCALAPPDATA%\MoonlanderTextTools`, and creates the three commands directly through CopyQ's documented command-object API. It replaces only the three exact `Moonlander:` command names and reports success only after reading all three names back from CopyQ. All unrelated commands are preserved.
 
 2. In CopyQ Preferences → Commands, run each staged command manually against selected text. Confirm that CopyQ history count/content does not change and the original rich clipboard returns.
 

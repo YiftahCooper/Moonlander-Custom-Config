@@ -29,6 +29,45 @@
     return clone;
   }
 
+  function quoteForCopyQScript(value) {
+    return String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  }
+
+  function commandScript(installDir, helperPath, transformName, options) {
+    var safeInstallDir = quoteForCopyQScript(installDir);
+    var safeHelperPath = quoteForCopyQScript(helperPath);
+    return [
+      'copyq:',
+      "source('" + safeInstallDir + "/transformations.js');",
+      "source('" + safeInstallDir + "/transaction.js');",
+      'MoonlanderTransaction.runTransaction(',
+      '    MoonlanderTransforms.' + transformName + ',',
+      '    ' + options + ',',
+      "    MoonlanderTransaction.createCopyQAdapter('" + safeHelperPath + "')",
+      ');',
+    ].join('\n');
+  }
+
+  function createCommands(installDir, helperPath) {
+    return [
+      {
+        name: COMMAND_NAMES[0],
+        cmd: commandScript(installDir, helperPath, 'smartTitleCase', '{}'),
+        globalShortcut: 'F13',
+      },
+      {
+        name: COMMAND_NAMES[1],
+        cmd: commandScript(installDir, helperPath, 'cycleCase', '{reselect: true}'),
+        globalShortcut: 'F19',
+      },
+      {
+        name: COMMAND_NAMES[2],
+        cmd: commandScript(installDir, helperPath, 'transplantHebrewEnglish', '{}'),
+        globalShortcut: 'F22',
+      },
+    ];
+  }
+
   function validateIncoming(incoming) {
     if (incoming.length !== COMMAND_NAMES.length) {
       throw new Error('Command template must contain exactly three Moonlander commands');
@@ -74,8 +113,8 @@
     }).concat(prepared);
   }
 
-  function install(templatePath, activateShortcuts) {
-    var incoming = importCommands(templatePath);
+  function install(installDir, helperPath, activateShortcuts) {
+    var incoming = createCommands(installDir, helperPath);
     var merged = mergeCommands(commands(), incoming, activateShortcuts);
     setCommands(merged);
     return merged.length;
@@ -83,6 +122,7 @@
 
   return {
     COMMAND_NAMES: COMMAND_NAMES,
+    createCommands: createCommands,
     mergeCommands: mergeCommands,
     install: install,
   };
