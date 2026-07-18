@@ -7,62 +7,131 @@ const { runTransaction } = require('../transaction.js');
 
 function fakeAdapter(options = {}) {
   const calls = [];
-  let currentText = options.selectionText === undefined ? 'selected text' : options.selectionText;
-  let monitoring = options.monitoring === undefined ? true : options.monitoring;
-  let restoreRead = 0;
-  const snapshot = { 'text/plain': 'old text', 'image/png': '<binary>' };
-
-  return {
-    calls,
-    snapshot,
-    snapshotClipboard() { calls.push('snapshot'); return snapshot; },
-    isMonitoring() { calls.push('monitoring'); return monitoring; },
-    disableMonitoring() { calls.push('disable'); monitoring = false; },
-    enableMonitoring() { calls.push('enable'); monitoring = true; },
-    captureSelection() { calls.push('capture'); },
-    readText() {
-      calls.push('read');
-      if (options.newClipboardText !== undefined && restoreRead++ > 0) {
-        return options.newClipboardText;
-      }
-      return currentText;
-    },
-    writeText(text) { calls.push(['write', text]); currentText = text; },
-    paste() { calls.push('paste'); },
-    sleep(milliseconds) { calls.push(['sleep', milliseconds]); },
-    reselect(text) { calls.push(['reselect', text]); return 0; },
-    restoreClipboard(item) { calls.push(['restore', item]); currentText = item['text/plain']; },
+  const scheduled = [];
+  const state = options.state || { generation: 0, active: null };
+  const environment = options.environment || {
+    item: { 'text/plain': 'old text', 'image/png': '<binary>' },
+    monitoring: options.monitoring === undefined ? true : options.monitoring,
   };
+
+  const adapter = {
+    calls,
+    scheduled,
+    state,
+    environment,
+    snapshotClipboard() {
+      calls.push('snapshot');
+      return { ...environment.item };
+    },
+    isMonitoring() { calls.push('monitoring'); return environment.monitoring; },
+    disableMonitoring() { calls.push('disable'); environment.monitoring = false; },
+    enableMonitoring() { calls.push('enable'); environment.monitoring = true; },
+    captureSelection() {
+      calls.push('capture');
+      if (options.captureError) {
+        environment.item = {};
+        throw new Error('capture failed');
+      }
+      const text = options.selectionText === undefined ? 'selected text' : options.selectionText;
+      environment.item = { 'text/plain': text };
+    },
+    readText() { calls.push('read'); return environment.item['text/plain'] || ''; },
+    writeText(text) {
+      calls.push(['write', text]);
+      environment.item = { 'text/plain': text };
+    },
+    paste() {
+      calls.push('paste');
+      if (options.pasteError) {
+        throw new Error('paste failed');
+      }
+    },
+    schedule(milliseconds, callback) {
+      calls.push(['schedule', milliseconds]);
+      scheduled.push({ milliseconds, callback });
+    },
+    reselect(text) {
+      calls.push(['reselect', text]);
+      return options.reselectExitCode || 0;
+    },
+    restoreClipboard(item) {
+      calls.push(['restore', item]);
+      environment.item = { ...item };
+    },
+    log(message) { calls.push(['log', String(message)]); },
+  };
+  return adapter;
 }
 
-test('transaction disables history, pastes, and restores every clipboard format', () => {
+function runScheduled(adapter, milliseconds) {
+  const task = adapter.scheduled.find((entry) => entry.milliseconds === milliseconds);
+  assert.ok(task, `No callback scheduled for ${milliseconds} ms`);
+  task.callback();
+}
+
+test('transaction pastes immediately and restores every clipboard format asynchronously', () => {
   const api = fakeAdapter({ selectionText: 'hello' });
+  const original = { ...api.environment.item };
   const result = runTransaction((text) => text.toUpperCase(), {}, api);
 
   assert.deepEqual(result, { status: 'transformed', text: 'HELLO' });
-  assert.deepEqual(api.calls, [
-    'snapshot', 'monitoring', 'disable', 'capture', 'read',
-    ['write', 'HELLO'], ['sleep', 40], 'paste', 'enable',
-    ['sleep', 250], 'read', ['restore', api.snapshot],
-  ]);
+  assert.equal(api.environment.item['text/plain'], 'HELLO');
+  assert.equal(api.calls.includes('paste'), true);
+  assert.equal(api.calls.some((call) => Array.isArray(call) && call[0] === 'restore'), false);
+  assert.deepEqual(api.scheduled.map((entry) => entry.milliseconds), [250]);
+
+  runScheduled(api, 250);
+  assert.deepEqual(api.environment.item, original);
 });
 
-test('case transaction sends transformed UTF-8 text to reselection after paste', () => {
+test('case transaction schedules reselection after paste and restoration independently', () => {
   const api = fakeAdapter({ selectionText: 'lower' });
   runTransaction((text) => text.toUpperCase(), { reselect: true }, api);
 
+  assert.deepEqual(api.scheduled.map((entry) => entry.milliseconds), [35, 250]);
+  assert.equal(api.calls.some((call) => Array.isArray(call) && call[0] === 'reselect'), false);
+
+  runScheduled(api, 35);
   assert.ok(api.calls.some((call) => Array.isArray(call)
     && call[0] === 'reselect' && call[1] === 'LOWER'));
-  assert.deepEqual(
-    api.calls.filter((call) => Array.isArray(call) && call[0] === 'sleep'),
-    [['sleep', 40], ['sleep', 35], ['sleep', 250]],
-  );
+  assert.equal(api.environment.item['text/plain'], 'LOWER');
+
+  runScheduled(api, 250);
+  assert.equal(api.environment.item['text/plain'], 'old text');
+});
+
+test('rapid repeated transactions invalidate old callbacks and restore the first snapshot', () => {
+  const state = { generation: 0, active: null };
+  const environment = {
+    item: { 'text/plain': 'original clipboard', 'image/png': '<binary>' },
+    monitoring: true,
+  };
+  const first = fakeAdapter({ state, environment, selectionText: 'lower' });
+  runTransaction((text) => text.toUpperCase(), { reselect: true }, first);
+  runScheduled(first, 35);
+
+  const second = fakeAdapter({ state, environment, selectionText: 'LOWER' });
+  runTransaction((text) => text.toLowerCase(), { reselect: true }, second);
+  assert.equal(second.calls.includes('snapshot'), false);
+
+  runScheduled(first, 250);
+  assert.equal(environment.item['text/plain'], 'lower');
+
+  runScheduled(second, 35);
+  runScheduled(second, 250);
+  assert.deepEqual(environment.item, {
+    'text/plain': 'original clipboard',
+    'image/png': '<binary>',
+  });
 });
 
 test('a newer clipboard change is never overwritten during delayed restoration', () => {
-  const api = fakeAdapter({ selectionText: 'hello', newClipboardText: 'new user copy' });
+  const api = fakeAdapter({ selectionText: 'hello' });
   runTransaction((text) => text.toUpperCase(), {}, api);
+  api.environment.item = { 'text/plain': 'new user copy' };
 
+  runScheduled(api, 250);
+  assert.equal(api.environment.item['text/plain'], 'new user copy');
   assert.equal(api.calls.some((call) => Array.isArray(call) && call[0] === 'restore'), false);
 });
 
@@ -75,25 +144,47 @@ test('originally disabled monitoring remains disabled', () => {
 
 test('empty selection aborts without pasting and restores the clipboard', () => {
   const api = fakeAdapter({ selectionText: '' });
+  const original = { ...api.environment.item };
   const result = runTransaction((text) => text.toUpperCase(), {}, api);
 
   assert.deepEqual(result, { status: 'no-selection' });
   assert.equal(api.calls.includes('paste'), false);
-  assert.ok(api.calls.some((call) => Array.isArray(call) && call[0] === 'restore'));
+  assert.deepEqual(api.environment.item, original);
+  assert.deepEqual(api.scheduled, []);
 });
 
 test('a no-op transform restores clipboard without pasting', () => {
   const api = fakeAdapter({ selectionText: '123' });
+  const original = { ...api.environment.item };
   const result = runTransaction((text) => text, {}, api);
 
   assert.deepEqual(result, { status: 'no-change' });
   assert.equal(api.calls.includes('paste'), false);
+  assert.deepEqual(api.environment.item, original);
 });
 
-test('exceptions restore monitoring and the original clipboard', () => {
-  const api = fakeAdapter({ selectionText: 'hello' });
-  assert.throws(() => runTransaction(() => { throw new Error('boom'); }, {}, api), /boom/);
+for (const failure of ['captureError', 'pasteError']) {
+  test(`${failure} is logged and contained without an error dialog`, () => {
+    const api = fakeAdapter({ selectionText: 'hello', [failure]: true });
+    const original = { ...api.environment.item };
+    const result = runTransaction((text) => text.toUpperCase(), {}, api);
 
-  assert.ok(api.calls.includes('enable'));
-  assert.ok(api.calls.some((call) => Array.isArray(call) && call[0] === 'restore'));
+    assert.deepEqual(result, { status: 'error' });
+    assert.deepEqual(api.environment.item, original);
+    assert.equal(api.environment.monitoring, true);
+    assert.ok(api.calls.some((call) => Array.isArray(call)
+      && call[0] === 'log' && call[1].includes('failed')));
+  });
+}
+
+test('reselection failure is logged and does not prevent restoration', () => {
+  const api = fakeAdapter({ selectionText: 'lower', reselectExitCode: 3 });
+  runTransaction((text) => text.toUpperCase(), { reselect: true }, api);
+
+  runScheduled(api, 35);
+  assert.ok(api.calls.some((call) => Array.isArray(call)
+    && call[0] === 'log' && call[1].includes('exit code 3')));
+
+  runScheduled(api, 250);
+  assert.equal(api.environment.item['text/plain'], 'old text');
 });

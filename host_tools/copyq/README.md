@@ -28,6 +28,8 @@ host_tools/reselect/Moonlander.Reselect/bin/Release/net10.0-windows/win-x64/publ
 
 `Moonlander.Reselect.exe` is a short-lived console program. It reads transformed UTF-8 text from standard input, counts grapheme clusters, sends bounded Left and Shift+Right batches, and exits. It does not read or write the clipboard, access the network, request elevation, create a tray icon, or remain running. Exit codes are `0` success, `2` invalid input, and `3` incomplete `SendInput`. `--dry-run` prints the grapheme count without injecting keys.
 
+The transaction path contains no blocking sleeps. CopyQ pastes the transformed text immediately, schedules F19 reselection 35 ms later, and schedules guarded clipboard restoration 250 ms later with `afterMilliseconds()`. Rapid triggers share a generation-guarded restoration chain, so stale callbacks cannot overwrite newer text or make the CopyQ UI wait.
+
 ## Safe cutover
 
 1. Stage the CopyQ commands without shortcuts:
@@ -65,6 +67,8 @@ The installer is idempotent and makes a fresh backup on every run. Use `-WhatIf`
 - Hebrew becomes lowercase English; punctuation follows `kbdhebl3` physical positions.
 - Empty, punctuation-only, and alphabet-tie input is unchanged.
 - A new clipboard copy made during the delayed restore is not overwritten.
+- CopyQ remains responsive during the delayed restore and rapid F19 toggles do not queue behind old callbacks.
+- Capture, paste, and reselection failures are contained and logged instead of opening intermittent command-error dialogs.
 - Twenty repetitions of each space-key triple tap produce one action per triple and preserve single/hold/double behavior.
 - The language key taps `F18`, holds Left Ctrl, double taps `F22`, and has no triple-tap action.
 
