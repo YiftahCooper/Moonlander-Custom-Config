@@ -334,7 +334,6 @@ def _patch_triple_tap_text_tools(content: str) -> tuple[str, dict[str, int]]:
         "right-space/period-space",
         lambda body: (
             "case SINGLE_TAP: register_code16(KC_SPACE);" in body
-            and "case SINGLE_HOLD: register_code16(KC_SPACE);" in body
             and "case DOUBLE_TAP:" in body
             and (
                 "tap_code16(KC_KP_DOT); tap_code16(KC_SPACE);" in body
@@ -435,6 +434,7 @@ def _patch_modifier_only_thumb_keys(content: str) -> tuple[str, int]:
     replacements = (
         (
             re.compile(r"MT\(\s*MOD_RCTL\s*,\s*KC_(?:F22|NO)\s*\)"),
+            re.compile(r"\bKC_RIGHT_CTRL\b"),
             "MT(MOD_RCTL, KC_NO)",
             "Right Ctrl",
         ),
@@ -442,21 +442,26 @@ def _patch_modifier_only_thumb_keys(content: str) -> tuple[str, int]:
             re.compile(
                 r"MT\(\s*(?:MOD_LSFT\s*\|\s*MOD_LCTL|MOD_LCTL\s*\|\s*MOD_LSFT)\s*,\s*KC_(?:F19|NO)\s*\)"
             ),
+            re.compile(r"LSFT\(\s*KC_LEFT_CTRL\s*\)"),
             "MT(MOD_LSFT | MOD_LCTL, KC_NO)",
             "Shift+Ctrl",
         ),
     )
     patched = content
     changed = 0
-    for pattern, replacement, label in replacements:
-        matches = list(pattern.finditer(patched))
-        if len(matches) != 1:
+    for legacy_pattern, direct_pattern, replacement, label in replacements:
+        legacy_matches = list(legacy_pattern.finditer(patched))
+        direct_matches = list(direct_pattern.finditer(patched))
+        if not legacy_matches and len(direct_matches) == 1:
+            continue
+        if len(legacy_matches) != 1 or direct_matches:
             raise RuntimeError(
                 f"Could not uniquely identify the {label} modifier-only thumb key; "
-                f"found {len(matches)} matches"
+                f"found {len(legacy_matches) + len(direct_matches)} matches"
             )
-        original = matches[0].group(0)
-        patched = patched[:matches[0].start()] + replacement + patched[matches[0].end():]
+        match = legacy_matches[0]
+        original = match.group(0)
+        patched = patched[:match.start()] + replacement + patched[match.end():]
         if original != replacement:
             changed += 1
     return patched, changed
