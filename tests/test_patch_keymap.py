@@ -1,3 +1,6 @@
+Exit code: 0
+Wall time: 0.9 seconds
+Output:
 import importlib.util
 from pathlib import Path
 import unittest
@@ -104,6 +107,19 @@ class TripleTapPatchTests(unittest.TestCase):
         self.assertIn("KC_F19", left_space)
         self.assertIn("KC_F13", right_space)
 
+    def test_right_space_without_hold_action_is_identified(self):
+        fixture = load_unpatched_oryx_fixture().replace(
+            "        case SINGLE_HOLD: register_code16(KC_SPACE); break;\n",
+            "",
+            1,
+        )
+
+        patched, targets = PATCH_KEYMAP._patch_triple_tap_text_tools(fixture)
+
+        self.assertEqual(targets["right_space"], 2)
+        right_space, _ = PATCH_KEYMAP._get_function_body(patched, "dance_2_finished")
+        self.assertIn("case TRIPLE_TAP: tap_code16(KC_F13);", right_space)
+
     def test_single_hold_and_double_behaviors_are_preserved(self):
         patched, language_changed = PATCH_KEYMAP._patch_f18_language_dance(load_fixture())
         patched, _ = PATCH_KEYMAP._patch_triple_tap_text_tools(patched)
@@ -134,6 +150,19 @@ class TripleTapPatchTests(unittest.TestCase):
         self.assertEqual(second_changes, 0)
         self.assertEqual(twice, patched)
 
+    def test_current_oryx_direct_modifier_keys_are_already_valid(self):
+        fixture = load_unpatched_oryx_fixture()
+        fixture = fixture.replace("MT(MOD_RCTL, KC_F22)", "KC_RIGHT_CTRL")
+        fixture = fixture.replace(
+            "MT(MOD_LSFT | MOD_LCTL, KC_F19)",
+            "LSFT(KC_LEFT_CTRL)",
+        )
+
+        patched, changed = PATCH_KEYMAP._patch_modifier_only_thumb_keys(fixture)
+
+        self.assertEqual(changed, 0)
+        self.assertEqual(patched, fixture)
+
     def test_generated_triple_repeat_is_removed_only_from_target_dances(self):
         patched, _ = PATCH_KEYMAP._patch_triple_tap_text_tools(load_fixture())
         for index in (0, 1, 2):
@@ -153,3 +182,4 @@ class TripleTapPatchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
