@@ -175,7 +175,7 @@ Smart Title Case uses the configured small-word list (`a, an, and, as, at, but, 
 
 Transplantation follows Microsoft `kbdhebl3` physical positions. Direction is chosen by the predominant recognizable alphabet. Lowercase English is mapped to Hebrew, uppercase `A–Z` is preserved, Hebrew maps back to lowercase English, and alphabet ties are no-ops. This preserves the useful pattern where an initial shifted English capital survives while the following accidental lowercase English becomes Hebrew.
 
-CopyQ performs each transformation as a protected transaction: it snapshots every clipboard MIME format, disables history storage, captures and pastes the selection, restores monitoring immediately, then restores the original clipboard only if no newer copy has replaced the generated text. The .NET helper used by F19 receives UTF-8 text over standard input, counts Unicode grapheme clusters, and reselects with the caret at the right edge. It has no clipboard, network, administrator, tray, or persistent-process access.
+CopyQ performs each transformation as a protected, non-blocking transaction: it snapshots every clipboard MIME format, disables history storage, captures and pastes the selection immediately, and restores monitoring. CopyQ then uses `afterMilliseconds()` to reselect F19 output after 35 ms and safely restore the original clipboard after 250 ms only if no newer copy has replaced the generated text. Generation guards make stale callbacks harmless during rapid repeats, so delayed restoration does not freeze the CopyQ UI. The .NET helper used by F19 receives UTF-8 text over standard input, counts Unicode grapheme clusters, and reselects with the caret at the right edge. It has no clipboard, network, administrator, tray, or persistent-process access.
 
 See [`host_tools/copyq/README.md`](host_tools/copyq/README.md) for build, staged installation, activation, acceptance checks, and rollback.
 
@@ -342,55 +342,111 @@ Investigation of QMK source confirmed:
 - **MIDI_BASIC** routes note keycodes through `process_music()`, which (a) requires MIDI mode toggled ON (`MI_ON`) and (b) derives the note from **matrix position**, ignoring the note keycode entirely. `register_code16()` never emits MIDI.
 - **MIDI_ADVANCED** routes note keycodes through `process_midi()`, which decodes the note **by keycode value** (`midi_compute_note`) and tracks note-on/off. No mode toggle needed.
 
-**Decision**: Use MIDI_ADVANCED (strict superset; future-proof). The bass shifter forwards a transposed note keycode to `process_midi()`, keeping the per-key snapshot so press/release use the same shifted keycode (no stuck notes).
+**Decision**: Use MIDI_ADVANCED (strict superset; future-proof). The bass shifter forwards a transposed note keycode to `process_…2460 tokens truncated…, snapshot);
+        restorationDecided = true;
+        return { status: 'no-change' };
+      }
 
-### Why F13/F19/F22 for CopyQ?
+      adapter.writeText(generatedText);
+      adapter.paste();
+      pasted = true;
 
-`F19` is emitted only by the left-space triple tap. `F22` is emitted only by the language-key double tap. The two adjacent modifier-only thumb keys use `KC_NO` as their tap action, so tapping or double tapping them does nothing. `F13` is assigned to right-space Smart Title Case. CopyQ owns all three selected-text hotkeys so they share one protected clipboard transaction.
+      if (wasMonitoring) {
+        adapter.enableMonitoring();
+        monitoringRestored = true;
+      }
 
-`F18` remains separate because it is not a selected-text action: Windhawk converts it to the configured Windows language shortcut and synchronizes RGB state.
+      state.active = {
+        generation: generation,
+        snapshot: snapshot,
+        generatedText: generatedText,
+      };
 
-### Why preserve-by-default for Layer 2?
+      if (settings.reselect) {
+        adapter.schedule(35, function () {
+          if (!state.active || state.active.generation !== generation) {
+            return;
+          }
+          try {
+            var exitCode = adapter.reselect(generatedText);
+            if (exitCode !== undefined && exitCode !== 0) {
+              logFailure(adapter, 'Moonlander.Reselect failed with exit code ' + exitCode);
+            }
+          } catch (error) {
+            logFailure(adapter, 'Moonlander.Reselect failed: ' + error);
+          }
+        });
+      }
 
-The original patch script replaced the entire Layer 2 keymap, which erased user-configured keys from Oryx (such as RGB or layer toggles). The modern parser selectively merges QMK MIDI notes into designated matrix positions, leaving custom Oryx layout adjustments untouched.
+      adapter.schedule(250, function () {
+        if (!state.active || state.active.generation !== generation) {
+          return;
+        }
+        try {
+          if (adapter.readText() === generatedText) {
+            restoreNow(adapter, snapshot);
+          }
+        } finally {
+          if (state.active && state.active.generation === generation) {
+            state.active = null;
+          }
+        }
+      });
+      restorationDecided = true;
+      return { status: 'transformed', text: generatedText };
+    } catch (error) {
+      if (!pasted || generatedText === null || adapter.readText() === generatedText) {
+        restoreNow(adapter, snapshot);
+      }
+      restorationDecided = true;
+      state.active = null;
+      logFailure(adapter, 'Moonlander transaction failed: ' + error);
+      return { status: 'error' };
+    } finally {
+      if (wasMonitoring && !monitoringRestored) {
+        adapter.enableMonitoring();
+      }
+      if (!restorationDecided) {
+        if (!pasted || generatedText === null || adapter.readText() === generatedText) {
+          restoreNow(adapter, snapshot);
+        }
+      }
+    }
+  }
 
-## Troubleshooting
+  function createCopyQAdapter(helperPath) {
+    if (!global.MoonlanderTransactionState) {
+      global.MoonlanderTransactionState = { generation: 0, active: null };
+    }
+    return {
+      state: global.MoonlanderTransactionState,
+      snapshotClipboard: function () {
+        var formats = clipboard('?');
+        var item = {};
+        for (var i = 0; i < formats.length; ++i) {
+          item[formats[i]] = clipboard(formats[i]);
+        }
+        return item;
+      },
+      isMonitoring: function () { return monitoring(); },
+      disableMonitoring: function () { disable(); },
+      enableMonitoring: function () { enable(); },
+      captureSelection: function () { copy(); },
+      readText: function () { return str(clipboard()); },
+      writeText: function (text) { copy(text); },
+      paste: function () { paste(); },
+      schedule: function (milliseconds, callback) { afterMilliseconds(milliseconds, callback); },
+      reselect: function (text) {
+        var result = execute(helperPath, null, text);
+        return result && result.exit_code !== undefined ? result.exit_code : 0;
+      },
+      restoreClipboard: function (item) { copy(item); },
+      log: function (message) { console.warn(message); },
+    };
+  }
 
-### Windhawk mod not working
-
-- Ensure Windhawk is installed and the mod is enabled
-- Check that F18 is emitted by DANCE_0 (left thumb)
-- The mod polls language state every ~120ms; rapid switching may lag
-- The mod targets `explorer.exe`; if another app has focus the window-level shortcut may not fire
-
-### CopyQ text tools not working
-
-- Confirm CopyQ is running and the three exact `Moonlander:` commands are enabled.
-- If F19 or F22 cannot be registered, update the installed Windhawk mod to v2 before activating CopyQ shortcuts; the old mod owns those keys.
-- Stage without shortcuts first and run each command manually from CopyQ.
-- Do not invoke a transformation without selected text in a terminal where `Ctrl+C` would interrupt a process.
-
-### MIDI notes sound one octave too high
-
-The firmware sets `midi_config.octave = 1` at init. If notes are still wrong, check your DAW's MIDI channel mapping.
-
-### MIDI latency is too high
-
-The firmware uses `DEBOUNCE_TYPE sym_eager_pk`, `DEBOUNCE 5`, and `USB_POLLING_INTERVAL_MS 1`. If latency persists:
-- Disable RGB effects on the MIDI layer (use the RGB_TOG key you added)
-- Reduce your DAW's audio buffer size (128 or 256 samples)
-- Use ASIO drivers on Windows
-
-### Build fails with "not enough USB endpoints"
-
-The Moonlander with MIDI + RAW HID + NKRO can exceed the STM32F303's USB endpoint limit. The firmware already disables `MOUSEKEY_ENABLE` and `CONSOLE_ENABLE` to free endpoints. If it still fails, you may need to disable additional features.
-
-## License
-
-This project is provided as-is for personal use. QMK firmware is licensed under GPL-2.0.
-
-## Acknowledgments
-
-- ZSA Technology Labs for the Moonlander and Oryx
-- QMK community for the firmware framework
-- Microsoft for the kbdhebl3 Hebrew keyboard layout specification
+  return {
+    runTransaction: runTransaction,
+    createCopyQAdapter: createCopyQAdapter,
+  };
+}));
