@@ -23,6 +23,16 @@
       : String(shortcut).trim().toLowerCase();
   }
 
+  function shortcutTexts(command) {
+    var shortcuts = command.globalShortcuts;
+    if (shortcuts === undefined || shortcuts === null) {
+      shortcuts = command.globalShortcut === undefined ? [] : [command.globalShortcut];
+    } else if (!Array.isArray(shortcuts)) {
+      shortcuts = [shortcuts];
+    }
+    return shortcuts.map(shortcutText).filter(function (shortcut) { return shortcut !== ''; });
+  }
+
   function cloneCommand(command) {
     var clone = {};
     Object.keys(command).forEach(function (key) { clone[key] = command[key]; });
@@ -53,17 +63,17 @@
       {
         name: COMMAND_NAMES[0],
         cmd: commandScript(installDir, helperPath, 'smartTitleCase', '{}'),
-        globalShortcut: 'F13',
+        globalShortcuts: ['F13'],
       },
       {
         name: COMMAND_NAMES[1],
         cmd: commandScript(installDir, helperPath, 'cycleCase', '{reselect: true}'),
-        globalShortcut: 'F19',
+        globalShortcuts: ['F19'],
       },
       {
         name: COMMAND_NAMES[2],
         cmd: commandScript(installDir, helperPath, 'transplantHebrewEnglish', '{}'),
-        globalShortcut: 'F22',
+        globalShortcuts: ['F22'],
       },
     ];
   }
@@ -84,10 +94,11 @@
     validateIncoming(incoming);
     var prepared = incoming.map(function (command) {
       var clone = cloneCommand(command);
+      delete clone.globalShortcut;
       if (activateShortcuts) {
         clone.isGlobalShortcut = true;
       } else {
-        clone.globalShortcut = '';
+        clone.globalShortcuts = [];
         clone.isGlobalShortcut = false;
       }
       return clone;
@@ -95,15 +106,15 @@
 
     if (activateShortcuts) {
       prepared.forEach(function (desired) {
-        var wanted = shortcutText(desired.globalShortcut);
-        existing.forEach(function (current) {
-          if (!isMoonlanderName(current.name)
-              && wanted
-              && shortcutText(current.globalShortcut) === wanted) {
-            throw new Error(
-              desired.globalShortcut + ' is already assigned to CopyQ command ' + current.name,
-            );
-          }
+        shortcutTexts(desired).forEach(function (wanted) {
+          existing.forEach(function (current) {
+            if (!isMoonlanderName(current.name)
+                && shortcutTexts(current).indexOf(wanted) !== -1) {
+              throw new Error(
+                wanted.toUpperCase() + ' is already assigned to CopyQ command ' + current.name,
+              );
+            }
+          });
         });
       });
     }
@@ -113,10 +124,24 @@
     }).concat(prepared);
   }
 
+  function verifyInstalledShortcuts(installed, activateShortcuts) {
+    var expected = createCommands('', '');
+    expected.forEach(function (wanted) {
+      var matches = installed.filter(function (command) { return command.name === wanted.name; });
+      var wantedShortcuts = activateShortcuts ? shortcutTexts(wanted) : [];
+      if (matches.length !== 1
+          || JSON.stringify(shortcutTexts(matches[0])) !== JSON.stringify(wantedShortcuts)
+          || Boolean(matches[0].isGlobalShortcut) !== Boolean(activateShortcuts)) {
+        throw new Error('CopyQ shortcut verification failed for ' + wanted.name);
+      }
+    });
+  }
+
   function install(installDir, helperPath, activateShortcuts) {
     var incoming = createCommands(installDir, helperPath);
     var merged = mergeCommands(commands(), incoming, activateShortcuts);
     setCommands(merged);
+    verifyInstalledShortcuts(commands(), activateShortcuts);
     return merged.length;
   }
 
@@ -124,6 +149,7 @@
     COMMAND_NAMES: COMMAND_NAMES,
     createCommands: createCommands,
     mergeCommands: mergeCommands,
+    verifyInstalledShortcuts: verifyInstalledShortcuts,
     install: install,
   };
 }));
