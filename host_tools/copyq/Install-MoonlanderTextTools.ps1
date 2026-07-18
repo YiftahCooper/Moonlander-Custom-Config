@@ -100,7 +100,11 @@ $verificationExpression = @"
 $verificationOutput = @(Invoke-CopyQExpression -Expression $verificationExpression -Operation 'CopyQ command verification')
 $verificationJson = ($verificationOutput -join [Environment]::NewLine).Trim()
 try {
-    $actualCommands = @($verificationJson | ConvertFrom-Json)
+    # Windows PowerShell 5.1 preserves a top-level JSON array as one nested
+    # pipeline object. Enumerate it explicitly so each command is verified
+    # against only its own shortcut.
+    $parsedCommands = ConvertFrom-Json -InputObject $verificationJson
+    $actualCommands = @(foreach ($command in $parsedCommands) { $command })
 } catch {
     throw "CopyQ command verification returned invalid JSON: $verificationJson. Backup: $backupPath"
 }
