@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 0.9 seconds
-Output:
 import importlib.util
 from pathlib import Path
 import unittest
@@ -182,4 +179,3 @@ class TripleTapPatchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
