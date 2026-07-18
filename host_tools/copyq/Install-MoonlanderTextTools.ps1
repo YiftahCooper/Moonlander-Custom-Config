@@ -78,21 +78,46 @@ $expectedNames = @(
     'Moonlander: Cycle Case'
     'Moonlander: Transplant Hebrew-English'
 )
+$expectedShortcutByName = [ordered]@{
+    'Moonlander: Smart Title Case' = 'F13'
+    'Moonlander: Cycle Case' = 'F19'
+    'Moonlander: Transplant Hebrew-English' = 'F22'
+}
 $verificationExpression = @"
 (function () {
     var wanted = ['Moonlander: Smart Title Case', 'Moonlander: Cycle Case', 'Moonlander: Transplant Hebrew-English'];
-    return commands()
+    return JSON.stringify(commands()
         .filter(function (command) { return wanted.indexOf(command.name) !== -1; })
-        .map(function (command) { return command.name; })
-        .sort()
-        .join('\n');
+        .map(function (command) {
+            return {
+                name: command.name,
+                globalShortcuts: command.globalShortcuts || [],
+                isGlobalShortcut: Boolean(command.isGlobalShortcut)
+            };
+        }));
 }())
 "@
 $verificationOutput = @(Invoke-CopyQExpression -Expression $verificationExpression -Operation 'CopyQ command verification')
-$actualNames = @(($verificationOutput -join [Environment]::NewLine) -split '\r?\n' | Where-Object { $_ })
+$verificationJson = ($verificationOutput -join [Environment]::NewLine).Trim()
+try {
+    $actualCommands = @($verificationJson | ConvertFrom-Json)
+} catch {
+    throw "CopyQ command verification returned invalid JSON: $verificationJson. Backup: $backupPath"
+}
+$actualNames = @($actualCommands | ForEach-Object { $_.name })
 $nameDifference = @(Compare-Object -ReferenceObject ($expectedNames | Sort-Object) -DifferenceObject ($actualNames | Sort-Object))
 if ($nameDifference.Count -ne 0) {
     throw "CopyQ command verification failed. Expected all three Moonlander commands; CopyQ returned: $($actualNames -join ', '). Backup: $backupPath"
+}
+
+foreach ($name in $expectedNames) {
+    $actualCommand = @($actualCommands | Where-Object { $_.name -eq $name })[0]
+    $actualShortcuts = @($actualCommand.globalShortcuts | ForEach-Object { [string]$_ })
+    $expectedShortcuts = if ($ActivateShortcuts) { @($expectedShortcutByName[$name]) } else { @() }
+    $shortcutDifference = @(Compare-Object -ReferenceObject $expectedShortcuts -DifferenceObject $actualShortcuts -CaseSensitive)
+    if ($shortcutDifference.Count -ne 0 -or [bool]$actualCommand.isGlobalShortcut -ne [bool]$ActivateShortcuts) {
+        throw "CopyQ shortcut verification failed for '$name'. Expected: $($expectedShortcuts -join ', '); actual: $($actualShortcuts -join ', '). Backup: $backupPath"
+    }
 }
 
 $mode = if ($ActivateShortcuts) { 'active shortcuts' } else { 'staged without shortcuts' }
