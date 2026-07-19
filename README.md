@@ -358,7 +358,7 @@ The original patch script replaced the entire Layer 2 keymap, which erased user-
 
 - Ensure Windhawk is installed and the mod is enabled
 - Check that F18 is emitted by DANCE_0 (left thumb)
-- The mod polls language state every ~120ms; rapid switching may lag
+- Ordinary language-state checks use the configured background interval (120 ms by default). After F18, the mod checks every 10 ms for up to 250 ms and sends RGB only after Windows confirms the new language.
 - The mod targets `explorer.exe`; if another app has focus the window-level shortcut may not fire
 
 ### CopyQ text tools not working

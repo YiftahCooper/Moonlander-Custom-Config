@@ -26,6 +26,35 @@ class WindhawkOwnershipTests(unittest.TestCase):
         self.assertIn("kOryxStatusLedControlCommand", self.source)
         self.assertIn("send_language_state_to_keyboards", self.source)
 
+    def test_f18_uses_bounded_confirmed_fast_polling(self):
+        self.assertIn("constexpr DWORD kFastPollIntervalMs = 10;", self.source)
+        self.assertIn("constexpr DWORD kFastPollTimeoutMs = 250;", self.source)
+        self.assertIn("bool awaiting_language_change = false;", self.source)
+        self.assertIn("bool language_before_shortcut_is_hebrew = false;", self.source)
+        self.assertIn("DWORD fast_poll_started_tick = 0;", self.source)
+        self.assertRegex(
+            self.source,
+            r"get_active_language_is_hebrew\(&language_before_shortcut_is_hebrew\);"
+            r"(?s:.*?)trigger_language_shortcut\(\);"
+            r"(?s:.*?)awaiting_language_change = have_pre_switch_language;",
+        )
+
+    def test_fast_poll_does_not_send_stale_pre_switch_state(self):
+        self.assertIn(
+            "awaiting_language_change ? kFastPollIntervalMs",
+            self.source,
+        )
+        self.assertIn("still_waiting_for_language_change", self.source)
+        self.assertRegex(
+            self.source,
+            r"if \(!still_waiting_for_language_change\) \{"
+            r"(?s:.*?)send_language_state_to_keyboards\(is_hebrew\);",
+        )
+        self.assertIn(
+            "now - fast_poll_started_tick >= kFastPollTimeoutMs",
+            self.source,
+        )
+
     def test_windhawk_no_longer_owns_copyq_text_tool_hotkeys(self):
         self.assertNotIn("kHotkeyIdF19", self.source)
         self.assertNotIn("kHotkeyIdF22", self.source)

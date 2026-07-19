@@ -2,7 +2,7 @@
 // @id              moonlander-language-sync
 // @name            Moonlander Language Sync
 // @description     Maps F18 to Windows language switching and syncs EN/HE state to QMK RGB over RAW HID.
-// @version         2.0.0
+// @version         2.0.1
 // @include         explorer.exe
 // @compilerOptions -lsetupapi -lhid
 // ==/WindhawkMod==
@@ -20,6 +20,9 @@
 //
 // Transport uses Oryx's ORYX_STATUS_LED_CONTROL command (0x0A). Firmware reads
 // the mirrored boolean from rawhid_state.status_led_control.
+// After F18, Windows is checked every 10 ms until the language change is
+// confirmed (or 250 ms elapse); ordinary background synchronization continues
+// to use the configurable polling interval.
 // ==/WindhawkModReadme==
 
 // ==WindhawkModSettings==
@@ -31,8 +34,8 @@
   $name: F18 shortcut mode
   $description: 0=None, 1=Win+Space, 2=Alt+Shift, 3=Ctrl+Shift.
 - pollIntervalMs: 120
-  $name: Poll interval (ms)
-  $description: How often to read the current Windows input language.
+  $name: Background poll interval (ms)
+  $description: How often to read the current Windows input language outside the brief confirmed fast-poll window after F18.
 - onlyMoonlander: true
   $name: Restrict to Moonlander
   $description: If enabled, only ZSA devices with product string containing "Moonlander" are targeted.
@@ -61,6 +64,8 @@ constexpr uint8_t kOryxStatusLedControlCommand = 0x0A;
 constexpr uint8_t kLanguageSyncEnglish = 0x00;
 constexpr uint8_t kLanguageSyncHebrew = 0x01;
 constexpr DWORD kRetryWhenNotSentMs = 5000;
+constexpr DWORD kFastPollIntervalMs = 10;
+constexpr DWORD kFastPollTimeoutMs = 250;
 
 enum ShortcutMode : int {
     ShortcutNone = 0,
@@ -321,6 +326,9 @@ DWORD WINAPI worker_thread_proc(void*) {
     bool last_send_succeeded = false;
     DWORD next_unsent_retry_tick = 0;
     DWORD last_poll_tick = 0;
+    bool awaiting_language_change = false;
+    bool language_before_shortcut_is_hebrew = false;
+    DWORD fast_poll_started_tick = 0;
 
     while (WaitForSingleObject(g_stop_event, 0) == WAIT_TIMEOUT) {
         bool f18_dispatched_in_this_drain = false;
@@ -329,7 +337,11 @@ DWORD WINAPI worker_thread_proc(void*) {
                 && message.wParam == kHotkeyIdF18
                 && !f18_dispatched_in_this_drain) {
                 f18_dispatched_in_this_drain = true;
+                bool have_pre_switch_language =
+                    get_active_language_is_hebrew(&language_before_shortcut_is_hebrew);
                 trigger_language_shortcut();
+                awaiting_language_change = have_pre_switch_language;
+                fast_poll_started_tick = GetTickCount();
                 have_last_state = false;
                 last_send_succeeded = false;
                 next_unsent_retry_tick = 0;
@@ -338,32 +350,43 @@ DWORD WINAPI worker_thread_proc(void*) {
         }
 
         DWORD now = GetTickCount();
+        DWORD poll_interval_ms = awaiting_language_change ? kFastPollIntervalMs
+                                                          : static_cast<DWORD>(g_settings.poll_interval_ms);
         if (last_poll_tick == 0
-            || now - last_poll_tick >= static_cast<DWORD>(g_settings.poll_interval_ms)) {
+            || now - last_poll_tick >= poll_interval_ms) {
             last_poll_tick = now;
 
             bool is_hebrew = false;
             if (get_active_language_is_hebrew(&is_hebrew)) {
-                bool state_changed = !have_last_state || is_hebrew != last_is_hebrew;
-                bool should_retry = !state_changed
-                    && !last_send_succeeded
-                    && (next_unsent_retry_tick == 0 || now >= next_unsent_retry_tick);
-                if (state_changed || should_retry) {
-                    bool sent = send_language_state_to_keyboards(is_hebrew);
-                    last_is_hebrew = is_hebrew;
-                    have_last_state = true;
-                    last_send_succeeded = sent;
-                    next_unsent_retry_tick = sent ? 0 : now + kRetryWhenNotSentMs;
+                bool fast_poll_expired = awaiting_language_change
+                    && now - fast_poll_started_tick >= kFastPollTimeoutMs;
+                bool still_waiting_for_language_change = awaiting_language_change
+                    && !fast_poll_expired
+                    && is_hebrew == language_before_shortcut_is_hebrew;
 
-                    if (g_settings.debug_logging) {
-                        if (sent) {
-                            Wh_Log(
-                                L"Language sync sent: %ls",
-                                is_hebrew ? L"Hebrew" : L"English");
-                        } else {
-                            Wh_Log(
-                                L"Language sync not sent; retry scheduled in %lu ms",
-                                kRetryWhenNotSentMs);
+                if (!still_waiting_for_language_change) {
+                    awaiting_language_change = false;
+                    bool state_changed = !have_last_state || is_hebrew != last_is_hebrew;
+                    bool should_retry = !state_changed
+                        && !last_send_succeeded
+                        && (next_unsent_retry_tick == 0 || now >= next_unsent_retry_tick);
+                    if (state_changed || should_retry) {
+                        bool sent = send_language_state_to_keyboards(is_hebrew);
+                        last_is_hebrew = is_hebrew;
+                        have_last_state = true;
+                        last_send_succeeded = sent;
+                        next_unsent_retry_tick = sent ? 0 : now + kRetryWhenNotSentMs;
+
+                        if (g_settings.debug_logging) {
+                            if (sent) {
+                                Wh_Log(
+                                    L"Language sync sent: %ls",
+                                    is_hebrew ? L"Hebrew" : L"English");
+                            } else {
+                                Wh_Log(
+                                    L"Language sync not sent; retry scheduled in %lu ms",
+                                    kRetryWhenNotSentMs);
+                            }
                         }
                     }
                 }
