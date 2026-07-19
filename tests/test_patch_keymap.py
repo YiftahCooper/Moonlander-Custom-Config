@@ -46,8 +46,15 @@ class TripleTapPatchTests(unittest.TestCase):
         self.assertIn("case SINGLE_TAP: register_code16(KC_F18);", patched)
         self.assertIn("case SINGLE_HOLD: register_code16(KC_LEFT_CTRL);", patched)
         self.assertIn("case DOUBLE_TAP: register_code16(KC_F22);", patched)
-        self.assertIn("case TRIPLE_TAP: tap_code16(KC_F19);", patched)
-        self.assertIn("case TRIPLE_TAP: tap_code16(KC_F13);", patched)
+        language_on, _ = PATCH_KEYMAP._get_function_body(patched, "on_dance_0")
+        left_space_on, _ = PATCH_KEYMAP._get_function_body(patched, "on_dance_1")
+        right_space_on, _ = PATCH_KEYMAP._get_function_body(patched, "on_dance_2")
+        self.assertIn("state->count == 2", language_on)
+        self.assertIn("tap_code16(KC_F22);", language_on)
+        self.assertIn("state->count == 3", left_space_on)
+        self.assertIn("tap_code16(KC_F19);", left_space_on)
+        self.assertIn("state->count == 3", right_space_on)
+        self.assertIn("tap_code16(KC_F13);", right_space_on)
         language, _ = PATCH_KEYMAP._get_function_body(patched, "dance_0_finished")
         self.assertNotIn("case TRIPLE_TAP", language)
 
@@ -76,16 +83,51 @@ class TripleTapPatchTests(unittest.TestCase):
         self.assertNotIn("*/", cleaned)
         self.assertIn("case SINGLE_TAP", cleaned)
 
-    def test_first_patch_adds_explicit_triple_state_and_expected_actions(self):
+    def test_first_patch_emits_terminal_actions_from_on_each_tap_callbacks(self):
         patched, targets = PATCH_KEYMAP._patch_triple_tap_text_tools(load_fixture())
 
         self.assertEqual(targets, {"language": 0, "left_space": 1, "right_space": 2})
         self.assertIn("TRIPLE_TAP", patched)
-        language, _ = PATCH_KEYMAP._get_function_body(patched, "dance_0_finished")
-        self.assertNotIn("case TRIPLE_TAP", language)
+        language_on, _ = PATCH_KEYMAP._get_function_body(patched, "on_dance_0")
+        left_space_on, _ = PATCH_KEYMAP._get_function_body(patched, "on_dance_1")
+        right_space_on, _ = PATCH_KEYMAP._get_function_body(patched, "on_dance_2")
+        self.assertIn("state->count == 2", language_on)
+        self.assertIn("tap_code16(KC_F22);", language_on)
+        self.assertIn("moonlander_language_terminal_fired", language_on)
+        self.assertIn("state->count == 3", left_space_on)
+        self.assertIn("tap_code16(KC_F19);", left_space_on)
+        self.assertIn("moonlander_left_space_terminal_fired", left_space_on)
+        self.assertIn("state->count == 3", right_space_on)
+        self.assertIn("tap_code16(KC_F13);", right_space_on)
+        self.assertIn("moonlander_right_space_terminal_fired", right_space_on)
         self.assertNotIn("\n */\n", patched)
-        self.assertIn("case TRIPLE_TAP: tap_code16(KC_F19);", patched)
-        self.assertIn("case TRIPLE_TAP: tap_code16(KC_F13);", patched)
+
+    def test_finished_and_reset_handlers_suppress_delayed_duplicates(self):
+        patched, _ = PATCH_KEYMAP._patch_triple_tap_text_tools(load_fixture())
+
+        for index, flag, keycode in (
+            (0, "moonlander_language_terminal_fired", "KC_F22"),
+            (1, "moonlander_left_space_terminal_fired", "KC_F19"),
+            (2, "moonlander_right_space_terminal_fired", "KC_F13"),
+        ):
+            finished, _ = PATCH_KEYMAP._get_function_body(
+                patched, f"dance_{index}_finished"
+            )
+            reset, _ = PATCH_KEYMAP._get_function_body(patched, f"dance_{index}_reset")
+            self.assertIn(f"if ({flag})", finished)
+            self.assertIn(f"dance_state[{index}].step = MORE_TAPS;", finished)
+            self.assertNotIn(f"case TRIPLE_TAP: tap_code16({keycode});", finished)
+            self.assertIn(f"if ({flag})", reset)
+            self.assertIn(f"{flag} = false;", reset)
+            self.assertRegex(
+                reset,
+                rf"(?s)if \({flag}\).*?{flag} = false;.*?"
+                rf"dance_state\[{index}\]\.step = 0;.*?return;",
+            )
+
+        self.assertEqual(patched.count("static bool moonlander_language_terminal_fired;"), 1)
+        self.assertEqual(patched.count("static bool moonlander_left_space_terminal_fired;"), 1)
+        self.assertEqual(patched.count("static bool moonlander_right_space_terminal_fired;"), 1)
 
     def test_second_pass_is_idempotent(self):
         once, _ = PATCH_KEYMAP._patch_triple_tap_text_tools(load_fixture())
@@ -98,9 +140,11 @@ class TripleTapPatchTests(unittest.TestCase):
 
         self.assertEqual(targets, {"language": 7, "left_space": 4, "right_space": 9})
         language, _ = PATCH_KEYMAP._get_function_body(patched, "dance_7_finished")
-        left_space, _ = PATCH_KEYMAP._get_function_body(patched, "dance_4_finished")
-        right_space, _ = PATCH_KEYMAP._get_function_body(patched, "dance_9_finished")
+        language_on, _ = PATCH_KEYMAP._get_function_body(patched, "on_dance_7")
+        left_space, _ = PATCH_KEYMAP._get_function_body(patched, "on_dance_4")
+        right_space, _ = PATCH_KEYMAP._get_function_body(patched, "on_dance_9")
         self.assertNotIn("case TRIPLE_TAP", language)
+        self.assertIn("KC_F22", language_on)
         self.assertIn("KC_F19", left_space)
         self.assertIn("KC_F13", right_space)
 
@@ -114,8 +158,9 @@ class TripleTapPatchTests(unittest.TestCase):
         patched, targets = PATCH_KEYMAP._patch_triple_tap_text_tools(fixture)
 
         self.assertEqual(targets["right_space"], 2)
-        right_space, _ = PATCH_KEYMAP._get_function_body(patched, "dance_2_finished")
-        self.assertIn("case TRIPLE_TAP: tap_code16(KC_F13);", right_space)
+        right_space, _ = PATCH_KEYMAP._get_function_body(patched, "on_dance_2")
+        self.assertIn("state->count == 3", right_space)
+        self.assertIn("tap_code16(KC_F13);", right_space)
 
     def test_single_hold_and_double_behaviors_are_preserved(self):
         patched, language_changed = PATCH_KEYMAP._patch_f18_language_dance(load_fixture())
@@ -162,10 +207,12 @@ class TripleTapPatchTests(unittest.TestCase):
 
     def test_generated_triple_repeat_is_removed_only_from_target_dances(self):
         patched, _ = PATCH_KEYMAP._patch_triple_tap_text_tools(load_fixture())
-        for index in (0, 1, 2):
-            body, found = PATCH_KEYMAP._get_function_body(patched, f"on_dance_{index}")
-            self.assertTrue(found)
-            self.assertNotIn("state->count == 3", body)
+        language, _ = PATCH_KEYMAP._get_function_body(patched, "on_dance_0")
+        left_space, _ = PATCH_KEYMAP._get_function_body(patched, "on_dance_1")
+        right_space, _ = PATCH_KEYMAP._get_function_body(patched, "on_dance_2")
+        self.assertNotIn("tap_code16(KC_F18);\n        tap_code16(KC_F18);", language)
+        self.assertNotIn("tap_code16(KC_SPACE);", left_space)
+        self.assertNotIn("tap_code16(KC_SPACE);", right_space)
 
         unrelated_before, _ = PATCH_KEYMAP._get_function_body(load_fixture(), "on_dance_3")
         unrelated_after, _ = PATCH_KEYMAP._get_function_body(patched, "on_dance_3")

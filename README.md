@@ -116,7 +116,7 @@ A modified QWERTY layout with dual-function thumb keys (managed in Oryx, snapsho
 | **DANCE_0** `Gui` `Alt` `[` `]` `MT(RAlt,Tab)` | **DUAL_FUNC_2** `'` `/` `←` `↓` `→` |
 
 - `MT(RAlt, Tab)`: Hold Right Alt, tap Tab.
-- **DANCE_0** (language key): single tap → `F18`, hold → `LeftCtrl`, double tap → `F22` transplantation, triple tap → no action
+- **DANCE_0** (language key): single tap → `F18`, hold → `LeftCtrl`, second press → immediate `F22` transplantation
 - **DUAL_FUNC_2** (custom override): tap → `ENTER`, hold → `SHIFT+ENTER`
 
 #### Row 5 — Thumb Cluster (k50–k55, 6 keys)
@@ -127,10 +127,10 @@ A modified QWERTY layout with dual-function thumb keys (managed in Oryx, snapsho
 
 - `MT(RCtrl, NO)`: Hold = Right Ctrl; taps do nothing.
 - `MT(Shift+Ctrl, NO)`: Hold = Left Shift + Left Ctrl; taps do nothing.
-- **DANCE_1** (left space/caps): single tap → `SPACE`, hold → `LEFT_SHIFT`, double tap → `CAPS LOCK`, released triple tap → `F19`
-- **DANCE_2** (right space/numdot): single tap → `SPACE`, hold → `SPACE`, double tap → `KP_DOT + SPACE`, released triple tap → `F13`
+- **DANCE_1** (left space/caps): single tap → `SPACE`, hold → `LEFT_SHIFT`, double tap → `CAPS LOCK`, third press → immediate `F19`
+- **DANCE_2** (right space/numdot): single tap → `SPACE`, hold → `SPACE`, double tap → `KP_DOT + SPACE`, third press → immediate `F13`
 
-A held third tap and four-or-more taps intentionally perform no action. Oryx normally generates “repeat the ordinary tap three times” callbacks because its generic tap-dance exporter has no custom semantic for count 3; the patcher disables that fallback for the language dance and both space dances. Only the two space dances receive triple-tap actions.
+Once a terminal text-tool action fires, surplus taps in the same tap-dance window are ignored. The internal timeout closes the gesture without emitting a delayed duplicate or turning an extra tap into Space, Caps Lock, period-space, or `F18`. A held terminal press still fires, matching normal key-press behavior. Oryx normally generates “repeat the ordinary tap three times” callbacks because its generic tap-dance exporter has no custom semantic for count 3; the patcher replaces that fallback for the language dance and both space dances.
 
 #### Per-Key Tapping Term Overrides
 
@@ -158,7 +158,7 @@ In future I will probably change things around so the entire base layer changes 
 - `SINGLE_HOLD` → `SINGLE_TAP` fallback
 - `DOUBLE_SINGLE_TAP` → `DOUBLE_TAP`
 - Hold-preference on Space/Shift and F18 language dances
-- Signature-detected space-key triple taps for F19/F13, with build failure if any target cannot be identified safely
+- Signature-detected immediate terminal actions (`F22` on language press two, `F19`/`F13` on space press three), with build failure if any target cannot be identified safely
 
 ### 4. Windows Host Tools: CopyQ + Windhawk
 

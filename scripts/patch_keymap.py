@@ -22,8 +22,11 @@ SPACESHIFT_HOLD_PREF_MARKER = "ORYX_SPACESHIFT_HOLD_PREF_PATCH"
 SPACE_DOT_TERM_MARKER = "ORYX_SPACE_DOT_TERM_PATCH"
 TRIPLE_TAP_ENUM_MARKER = "ORYX_TEXT_TOOLS_TRIPLE_ENUM_PATCH"
 TRIPLE_TAP_STEP_MARKER = "ORYX_TEXT_TOOLS_TRIPLE_STEP_PATCH"
-TRIPLE_TAP_ON_DANCE_MARKER = "ORYX_TEXT_TOOLS_TRIPLE_ON_DANCE_PATCH"
 TRIPLE_TAP_ACTION_MARKER = "ORYX_TEXT_TOOLS_TRIPLE_ACTION_PATCH"
+IMMEDIATE_TAP_STATE_MARKER = "ORYX_TEXT_TOOLS_IMMEDIATE_STATE_PATCH"
+IMMEDIATE_TAP_ON_DANCE_MARKER = "ORYX_TEXT_TOOLS_IMMEDIATE_ON_DANCE_PATCH"
+IMMEDIATE_TAP_FINISHED_MARKER = "ORYX_TEXT_TOOLS_IMMEDIATE_FINISHED_PATCH"
+IMMEDIATE_TAP_RESET_MARKER = "ORYX_TEXT_TOOLS_IMMEDIATE_RESET_PATCH"
 LANGUAGE_SWITCH_TAPPING_TERM_MS = 2000
 SPACE_DOT_TERM_SCALE_NUM = 6
 SPACE_DOT_TERM_SCALE_DEN = 5
@@ -269,23 +272,6 @@ def _find_unique_dance_by_signature(
     return matches[0]
 
 
-def _insert_triple_case(body: str, action: str, marker_suffix: str) -> str:
-    marker = f"{TRIPLE_TAP_ACTION_MARKER}_{marker_suffix}"
-    if marker in body:
-        return body
-
-    switch_close = body.rfind("}")
-    if switch_close == -1:
-        raise RuntimeError("Tap-dance handler has no switch block for TRIPLE_TAP")
-
-    case_indent_match = re.search(r"^(?P<indent>[ \t]*)case\s+SINGLE_TAP\s*:", body, re.MULTILINE)
-    if not case_indent_match:
-        raise RuntimeError("Tap-dance handler has no SINGLE_TAP case")
-    indent = case_indent_match.group("indent")
-    triple_case = f"{indent}case TRIPLE_TAP: {action} break; /* {marker} */\n"
-    return body[:switch_close] + triple_case + body[switch_close:]
-
-
 def _remove_marked_triple_case(body: str, marker_suffix: str) -> str:
     marker = f"{TRIPLE_TAP_ACTION_MARKER}_{marker_suffix}"
     return re.sub(
@@ -296,16 +282,103 @@ def _remove_marked_triple_case(body: str, marker_suffix: str) -> str:
     )
 
 
+def _inject_terminal_tap_state(content: str) -> str:
+    if IMMEDIATE_TAP_STATE_MARKER in content:
+        return content
+
+    state_pattern = re.compile(
+        r"^(?P<declaration>[ \t]*static\s+tap\s+dance_state\s*\[[^\]]+\]\s*;[ \t]*\r?\n)",
+        re.MULTILINE,
+    )
+    state_block = (
+        f"/* {IMMEDIATE_TAP_STATE_MARKER} */\n"
+        "static bool moonlander_language_terminal_fired;\n"
+        "static bool moonlander_left_space_terminal_fired;\n"
+        "static bool moonlander_right_space_terminal_fired;\n"
+    )
+    content, replaced = state_pattern.subn(
+        lambda match: match.group("declaration") + state_block,
+        content,
+        count=1,
+    )
+    if replaced != 1:
+        raise RuntimeError("Could not add immediate tap-dance state flags")
+    return content
+
+
+def _terminal_on_dance_body(count: int, keycode: str, flag: str, suffix: str) -> str:
+    return (
+        "\n"
+        f"    if (state->count == {count} && !{flag}) {{\n"
+        f"        tap_code16({keycode});\n"
+        f"        {flag} = true; /* {IMMEDIATE_TAP_ON_DANCE_MARKER}_{suffix} */\n"
+        "    }\n"
+        "    (void)user_data;\n"
+    )
+
+
+def _remove_marked_if_block(body: str, marker: str) -> str:
+    marker_idx = body.find(marker)
+    if marker_idx == -1:
+        return body
+
+    if_idx = body.rfind("if (", 0, marker_idx)
+    open_brace_idx = body.find("{", if_idx, marker_idx)
+    if if_idx == -1 or open_brace_idx == -1:
+        raise RuntimeError(f"Could not locate marked guard block: {marker}")
+    close_brace_idx = _find_matching_brace(body, open_brace_idx)
+    if close_brace_idx == -1:
+        raise RuntimeError(f"Could not close marked guard block: {marker}")
+
+    line_start = body.rfind("\n", 0, if_idx) + 1
+    block_end = close_brace_idx + 1
+    if body.startswith("\r\n", block_end):
+        block_end += 2
+    elif body.startswith("\n", block_end):
+        block_end += 1
+    return body[:line_start] + body[block_end:]
+
+
+def _prepend_terminal_finished_guard(
+    body: str, dance_idx: int, flag: str, suffix: str
+) -> str:
+    marker = f"{IMMEDIATE_TAP_FINISHED_MARKER}_{suffix}"
+    body = _remove_marked_if_block(body, marker)
+    return (
+        "\n"
+        f"    if ({flag}) {{\n"
+        f"        dance_state[{dance_idx}].step = MORE_TAPS; /* {marker} */\n"
+        "        return;\n"
+        "    }\n"
+        + body.lstrip("\r\n")
+    )
+
+
+def _prepend_terminal_reset_guard(
+    body: str, dance_idx: int, flag: str, suffix: str
+) -> str:
+    marker = f"{IMMEDIATE_TAP_RESET_MARKER}_{suffix}"
+    body = _remove_marked_if_block(body, marker)
+    return (
+        "\n"
+        f"    if ({flag}) {{\n"
+        f"        {flag} = false; /* {marker} */\n"
+        f"        dance_state[{dance_idx}].step = 0;\n"
+        "        return;\n"
+        "    }\n"
+        + body.lstrip("\r\n")
+    )
+
+
 def _patch_triple_tap_text_tools(content: str) -> tuple[str, dict[str, int]]:
     """
-    Add deterministic triple-tap host triggers to the two space dances.
+    Fire terminal text-tool actions without waiting for tap-dance settlement.
 
     Targets are discovered from their single/hold/double behavior, never their
-    generated DANCE_n indices. Generated count==3 repeat callbacks are disabled
-    for the language and space dances. The language key deliberately has no
-    triple-tap action; transplantation is its double tap. A held third tap and
-    four-or-more taps resolve to MORE_TAPS, for which these handlers have no
-    action.
+    generated DANCE_n indices. The language key emits F22 on its second press;
+    the two space dances emit F19/F13 on their third press. A fired flag keeps
+    the later finished/reset callbacks from duplicating the action and absorbs
+    surplus taps until the ordinary tap-dance window closes.
     """
     dance_indices = _discover_dance_indices(content)
     language_idx = _find_unique_dance_by_signature(
@@ -379,51 +452,68 @@ def _patch_triple_tap_text_tools(content: str) -> tuple[str, dict[str, int]]:
         raise RuntimeError("Could not find Oryx dance_step function")
     content = _replace_function_body(content, "dance_step", dance_step_body)
 
-    for dance_idx in targets.values():
+    content = _inject_terminal_tap_state(content)
+
+    terminal_actions = {
+        language_idx: (
+            2,
+            "KC_F22",
+            "moonlander_language_terminal_fired",
+            "LANGUAGE",
+        ),
+        left_space_idx: (
+            3,
+            "KC_F19",
+            "moonlander_left_space_terminal_fired",
+            "LEFT_SPACE",
+        ),
+        right_space_idx: (
+            3,
+            "KC_F13",
+            "moonlander_right_space_terminal_fired",
+            "RIGHT_SPACE",
+        ),
+    }
+
+    for dance_idx, (count, keycode, flag, suffix) in terminal_actions.items():
         on_name = f"on_dance_{dance_idx}"
         on_body, has_on = _get_function_body(content, on_name)
         if not has_on:
             raise RuntimeError(f"Missing generated {on_name} callback")
-        if TRIPLE_TAP_ON_DANCE_MARKER not in on_body:
-            no_op_body = (
-                "\n"
-                "    // Multi-tap actions are resolved only by dance_step().\n"
-                "    (void)state;\n"
-                f"    (void)user_data; /* {TRIPLE_TAP_ON_DANCE_MARKER} */\n"
-            )
-            content = _replace_function_body(content, on_name, no_op_body)
-
-    # Migrate the previous, incorrect language-triple implementation.
-    for function_name in (
-        f"dance_{language_idx}_finished",
-        f"dance_{language_idx}_reset",
-    ):
-        body, found = _get_function_body(content, function_name)
-        if not found:
-            raise RuntimeError(f"Missing generated {function_name} callback")
         content = _replace_function_body(
             content,
-            function_name,
-            _remove_marked_triple_case(body, "F22"),
+            on_name,
+            _terminal_on_dance_body(count, keycode, flag, suffix),
         )
 
-    actions = {
-        left_space_idx: ("tap_code16(KC_F19);", "F19"),
-        right_space_idx: ("tap_code16(KC_F13);", "F13"),
+    delayed_suffixes = {
+        language_idx: "F22",
+        left_space_idx: "F19",
+        right_space_idx: "F13",
     }
-    for dance_idx, (action, suffix) in actions.items():
+    for dance_idx, (_, _, flag, suffix) in terminal_actions.items():
         finished_name = f"dance_{dance_idx}_finished"
         finished_body, has_finished = _get_function_body(content, finished_name)
         if not has_finished:
             raise RuntimeError(f"Missing generated {finished_name} callback")
-        finished_body = _insert_triple_case(finished_body, action, suffix)
+        finished_body = _remove_marked_triple_case(
+            finished_body, delayed_suffixes[dance_idx]
+        )
+        finished_body = _prepend_terminal_finished_guard(
+            finished_body, dance_idx, flag, suffix
+        )
         content = _replace_function_body(content, finished_name, finished_body)
 
         reset_name = f"dance_{dance_idx}_reset"
         reset_body, has_reset = _get_function_body(content, reset_name)
         if not has_reset:
             raise RuntimeError(f"Missing generated {reset_name} callback")
-        reset_body = _insert_triple_case(reset_body, "", suffix)
+        reset_body = _remove_marked_triple_case(
+            reset_body, delayed_suffixes[dance_idx]
+        )
+        reset_body = _prepend_terminal_reset_guard(
+            reset_body, dance_idx, flag, suffix
+        )
         content = _replace_function_body(content, reset_name, reset_body)
 
     return content, targets
@@ -1701,10 +1791,10 @@ def patch_keymap(layout_dir: str) -> None:
     # longer match must fail rather than risk patching the wrong physical key.
     content, triple_tap_targets = _patch_triple_tap_text_tools(content)
     print(
-        "Patched triple-tap text tools: "
-        f"language DANCE_{triple_tap_targets['language']} -> no triple action, "
-        f"left-space DANCE_{triple_tap_targets['left_space']} -> F19, "
-        f"right-space DANCE_{triple_tap_targets['right_space']} -> F13"
+        "Patched immediate text-tool taps: "
+        f"language DANCE_{triple_tap_targets['language']} press 2 -> F22, "
+        f"left-space DANCE_{triple_tap_targets['left_space']} press 3 -> F19, "
+        f"right-space DANCE_{triple_tap_targets['right_space']} press 3 -> F13"
     )
 
     # 5) For the SPACE/SHIFT dance, prefer hold when interrupted by another key.

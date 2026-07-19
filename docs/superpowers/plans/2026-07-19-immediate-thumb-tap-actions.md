@@ -30,7 +30,7 @@
 - Consumes: `_patch_triple_tap_text_tools(content: str) -> tuple[str, dict[str, int]]`
 - Produces: generated C callbacks using `moonlander_<dance>_terminal_fired` state flags
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add assertions that the patched language `on_dance` callback contains:
 
@@ -42,7 +42,7 @@ self.assertIn("moonlander_language_terminal_fired", language_on)
 
 Add equivalent count-three assertions for `KC_F19` and `KC_F13`. Assert that finished handlers contain an early fired-flag guard and no marked terminal `case`, and reset handlers clear the corresponding flag. Keep the existing preservation, renumbering, and idempotence assertions.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -52,7 +52,7 @@ python -m unittest tests.test_patch_keymap.TripleTapPatchTests -v
 
 Expected: FAIL because the current `on_dance` callbacks are no-ops and `F19`/`F13` remain in delayed finished cases.
 
-- [ ] **Step 3: Implement guarded immediate callbacks**
+- [x] **Step 3: Implement guarded immediate callbacks**
 
 Inject three static flags once:
 
@@ -92,7 +92,7 @@ if (terminal_fired) {
 
 Remove any previously marked delayed `TRIPLE_TAP` terminal cases so upgrading an already-patched keymap is idempotent.
 
-- [ ] **Step 4: Run focused and complete tests and verify GREEN**
+- [x] **Step 4: Run focused and complete tests and verify GREEN**
 
 Run:
 
@@ -103,15 +103,15 @@ python -m unittest discover -s tests -v
 
 Expected: all tests pass with no errors or warnings.
 
-- [ ] **Step 5: Verify first-pass and second-pass generated output**
+- [x] **Step 5: Verify first-pass and second-pass generated output**
 
 Patch a temporary copy of `tests/fixtures/oryx_thumb_dances_unpatched.c`, patch the result again, and assert byte-for-byte equality. Confirm immediate actions occur only in the three intended `on_dance` callbacks and the deprecated Windhawk source is unchanged.
 
-- [ ] **Step 6: Update documentation**
+- [x] **Step 6: Update documentation**
 
 Update `README.md` to state that language transplantation fires on the second press, space text tools fire on the third press, and surplus taps are ignored while the internal tap-dance window closes.
 
-- [ ] **Step 7: Commit the implementation**
+- [x] **Step 7: Commit the implementation**
 
 ```powershell
 git add scripts/patch_keymap.py tests/test_patch_keymap.py README.md docs/superpowers/plans/2026-07-19-immediate-thumb-tap-actions.md

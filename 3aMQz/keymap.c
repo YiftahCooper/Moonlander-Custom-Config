@@ -244,6 +244,10 @@ enum {
 };
 
 static tap dance_state[4];
+/* ORYX_TEXT_TOOLS_IMMEDIATE_STATE_PATCH */
+static bool moonlander_language_terminal_fired;
+static bool moonlander_left_space_terminal_fired;
+static bool moonlander_right_space_terminal_fired;
 
 uint8_t dance_step(tap_dance_state_t *state);
 
@@ -268,12 +272,18 @@ void dance_0_finished(tap_dance_state_t *state, void *user_data);
 void dance_0_reset(tap_dance_state_t *state, void *user_data);
 
 void on_dance_0(tap_dance_state_t *state, void *user_data) {
-    // Multi-tap actions are resolved only by dance_step().
-    (void)state;
-    (void)user_data; /* ORYX_TEXT_TOOLS_TRIPLE_ON_DANCE_PATCH */
+    if (state->count == 2 && !moonlander_language_terminal_fired) {
+        tap_code16(KC_F22);
+        moonlander_language_terminal_fired = true; /* ORYX_TEXT_TOOLS_IMMEDIATE_ON_DANCE_PATCH_LANGUAGE */
+    }
+    (void)user_data;
 }
 
 void dance_0_finished(tap_dance_state_t *state, void *user_data) {
+    if (moonlander_language_terminal_fired) {
+        dance_state[0].step = MORE_TAPS; /* ORYX_TEXT_TOOLS_IMMEDIATE_FINISHED_PATCH_LANGUAGE */
+        return;
+    }
     if (state->count == 1 && state->interrupted) {
         dance_state[0].step = SINGLE_HOLD; /* ORYX_LANG_F18_HOLD_PREF_PATCH */
     } else {
@@ -288,6 +298,11 @@ void dance_0_finished(tap_dance_state_t *state, void *user_data) {
 }
 
 void dance_0_reset(tap_dance_state_t *state, void *user_data) {
+    if (moonlander_language_terminal_fired) {
+        moonlander_language_terminal_fired = false; /* ORYX_TEXT_TOOLS_IMMEDIATE_RESET_PATCH_LANGUAGE */
+        dance_state[0].step = 0;
+        return;
+    }
     wait_ms(10);
     switch (dance_state[0].step) {
         case SINGLE_TAP: unregister_code16(KC_F18); break;
@@ -302,12 +317,18 @@ void dance_1_finished(tap_dance_state_t *state, void *user_data);
 void dance_1_reset(tap_dance_state_t *state, void *user_data);
 
 void on_dance_1(tap_dance_state_t *state, void *user_data) {
-    // Multi-tap actions are resolved only by dance_step().
-    (void)state;
-    (void)user_data; /* ORYX_TEXT_TOOLS_TRIPLE_ON_DANCE_PATCH */
+    if (state->count == 3 && !moonlander_left_space_terminal_fired) {
+        tap_code16(KC_F19);
+        moonlander_left_space_terminal_fired = true; /* ORYX_TEXT_TOOLS_IMMEDIATE_ON_DANCE_PATCH_LEFT_SPACE */
+    }
+    (void)user_data;
 }
 
 void dance_1_finished(tap_dance_state_t *state, void *user_data) {
+    if (moonlander_left_space_terminal_fired) {
+        dance_state[1].step = MORE_TAPS; /* ORYX_TEXT_TOOLS_IMMEDIATE_FINISHED_PATCH_LEFT_SPACE */
+        return;
+    }
     if (state->count == 1 && state->interrupted) {
         dance_state[1].step = SINGLE_HOLD; /* ORYX_SPACESHIFT_HOLD_PREF_PATCH */
     } else {
@@ -318,18 +339,21 @@ void dance_1_finished(tap_dance_state_t *state, void *user_data) {
         case SINGLE_HOLD: register_code16(KC_LEFT_SHIFT); break;
         case DOUBLE_TAP: register_code16(KC_CAPS); break;
         case DOUBLE_SINGLE_TAP: register_code16(KC_CAPS); break; /* ORYX_DOUBLETAP_FALLBACK_PATCH */
-        case TRIPLE_TAP: tap_code16(KC_F19); break; /* ORYX_TEXT_TOOLS_TRIPLE_ACTION_PATCH_F19 */
 }
 }
 
 void dance_1_reset(tap_dance_state_t *state, void *user_data) {
+    if (moonlander_left_space_terminal_fired) {
+        moonlander_left_space_terminal_fired = false; /* ORYX_TEXT_TOOLS_IMMEDIATE_RESET_PATCH_LEFT_SPACE */
+        dance_state[1].step = 0;
+        return;
+    }
     wait_ms(10);
     switch (dance_state[1].step) {
         case SINGLE_TAP: unregister_code16(KC_SPACE); break;
         case SINGLE_HOLD: unregister_code16(KC_LEFT_SHIFT); break;
         case DOUBLE_TAP: unregister_code16(KC_CAPS); break;
         case DOUBLE_SINGLE_TAP: unregister_code16(KC_CAPS); break; /* ORYX_DOUBLETAP_FALLBACK_PATCH */
-        case TRIPLE_TAP:  break; /* ORYX_TEXT_TOOLS_TRIPLE_ACTION_PATCH_F19 */
 }
     dance_state[1].step = 0;
 }
@@ -338,30 +362,39 @@ void dance_2_finished(tap_dance_state_t *state, void *user_data);
 void dance_2_reset(tap_dance_state_t *state, void *user_data);
 
 void on_dance_2(tap_dance_state_t *state, void *user_data) {
-    // Multi-tap actions are resolved only by dance_step().
-    (void)state;
-    (void)user_data; /* ORYX_TEXT_TOOLS_TRIPLE_ON_DANCE_PATCH */
+    if (state->count == 3 && !moonlander_right_space_terminal_fired) {
+        tap_code16(KC_F13);
+        moonlander_right_space_terminal_fired = true; /* ORYX_TEXT_TOOLS_IMMEDIATE_ON_DANCE_PATCH_RIGHT_SPACE */
+    }
+    (void)user_data;
 }
 
 void dance_2_finished(tap_dance_state_t *state, void *user_data) {
+    if (moonlander_right_space_terminal_fired) {
+        dance_state[2].step = MORE_TAPS; /* ORYX_TEXT_TOOLS_IMMEDIATE_FINISHED_PATCH_RIGHT_SPACE */
+        return;
+    }
     dance_state[2].step = dance_step(state);
     switch (dance_state[2].step) {
         case SINGLE_TAP: register_code16(KC_SPACE); break;
         case SINGLE_HOLD: register_code16(KC_SPACE); break; /* ORYX_TAPHOLD_FALLBACK_PATCH */
         case DOUBLE_TAP: tap_code16(KC_KP_DOT); tap_code16(KC_SPACE); break; /* ORYX_FN24_NUMDOT_SPACE_PATCH */
         case DOUBLE_SINGLE_TAP: tap_code16(KC_KP_DOT); tap_code16(KC_SPACE); break; /* ORYX_FN24_NUMDOT_SPACE_PATCH */
-        case TRIPLE_TAP: tap_code16(KC_F13); break; /* ORYX_TEXT_TOOLS_TRIPLE_ACTION_PATCH_F13 */
 }
 }
 
 void dance_2_reset(tap_dance_state_t *state, void *user_data) {
+    if (moonlander_right_space_terminal_fired) {
+        moonlander_right_space_terminal_fired = false; /* ORYX_TEXT_TOOLS_IMMEDIATE_RESET_PATCH_RIGHT_SPACE */
+        dance_state[2].step = 0;
+        return;
+    }
     wait_ms(10);
     switch (dance_state[2].step) {
         case SINGLE_TAP: unregister_code16(KC_SPACE); break;
         case SINGLE_HOLD: unregister_code16(KC_SPACE); break; /* ORYX_TAPHOLD_FALLBACK_PATCH */
         case DOUBLE_TAP: break; /* ORYX_FN24_NUMDOT_SPACE_PATCH */
         case DOUBLE_SINGLE_TAP: break; /* ORYX_FN24_NUMDOT_SPACE_PATCH */
-        case TRIPLE_TAP:  break; /* ORYX_TEXT_TOOLS_TRIPLE_ACTION_PATCH_F13 */
 }
     dance_state[2].step = 0;
 }
