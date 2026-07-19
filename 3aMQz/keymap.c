@@ -49,11 +49,11 @@ enum tap_dance_codes {
   DANCE_3,
 };
 
-#define DUAL_FUNC_0 LT(2, KC_P)
-#define DUAL_FUNC_1 LT(11, KC_F6)
-#define DUAL_FUNC_2 LT(8, KC_8)
-#define DUAL_FUNC_3 LT(5, KC_B)
-#define DUAL_FUNC_4 LT(1, KC_F19)
+#define DUAL_FUNC_0 LT(4, KC_A)
+#define DUAL_FUNC_1 LT(10, KC_F7)
+#define DUAL_FUNC_2 LT(4, KC_M)
+#define DUAL_FUNC_3 LT(12, KC_F10)
+#define DUAL_FUNC_4 LT(4, KC_4)
 
 
 /* ORYX_MIDI_KEYCODE_ENUM_PATCH */
@@ -75,7 +75,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     DUAL_FUNC_1,    KC_A,           KC_S,           KC_D,           KC_F,           KC_G,           KC_GRAVE,                                                                       TG(1),          KC_H,           KC_J,           KC_K,           KC_L,           KC_SCLN,        KC_BSLS,        
     KC_LEFT_SHIFT,  KC_Z,           KC_X,           KC_C,           KC_V,           KC_B,                                           KC_N,           KC_M,           KC_COMMA,       KC_DOT,         KC_UP,          OSL(1),         
     TD(DANCE_0),    KC_LEFT_GUI,    KC_LEFT_ALT,    KC_LBRC,        KC_RBRC,        MT(MOD_RALT, KC_TAB),                                                                                                DUAL_FUNC_2,    KC_QUOTE,       KC_SLASH,       KC_LEFT,        KC_DOWN,        KC_RIGHT,       
-    TD(DANCE_1),    MT(MOD_RCTL, KC_NO),MT(MOD_LSFT | MOD_LCTL, KC_NO),                KC_DELETE,      KC_BSPC,        TD(DANCE_2)
+    TD(DANCE_1),    KC_RIGHT_CTRL,  LSFT(KC_LEFT_CTRL),                KC_DELETE,      KC_BSPC,        TD(DANCE_2)
   ),
   [1] = LAYOUT_moonlander(
     KC_ESCAPE,      KC_F1,          KC_F2,          KC_F3,          KC_F4,          KC_F5,          KC_F6,                                          KC_EXLM,        KC_KP_PLUS,     KC_KP_7,        KC_KP_8,        KC_KP_9,        KC_KP_EQUAL,    KC_AMPR,        

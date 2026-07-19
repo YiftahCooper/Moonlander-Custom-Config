@@ -174,12 +174,7 @@ class TripleTapPatchTests(unittest.TestCase):
         self.assertIn("case DOUBLE_TAP: tap_code16(KC_KP_DOT); tap_code16(KC_SPACE);", patched)
 
     def test_dedicated_thumb_modifiers_have_no_tap_action(self):
-        fixture = load_fixture()
-        fixture = fixture.replace("MT(MOD_RCTL, KC_NO)", "MT(MOD_RCTL, KC_F22)")
-        fixture = fixture.replace(
-            "MT(MOD_LSFT | MOD_LCTL, KC_NO)",
-            "MT(MOD_LSFT | MOD_LCTL, KC_F19)",
-        )
+        fixture = load_unpatched_oryx_fixture()
         patched, changed = PATCH_KEYMAP._patch_modifier_only_thumb_keys(fixture)
 
         self.assertEqual(changed, 2)

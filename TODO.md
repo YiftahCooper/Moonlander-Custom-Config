@@ -1,7 +1,8 @@
 # TODO
 
 ## Pending
-- [ ] Change the base layer RGB color from green to a different color when Hebrew is active (currently only the left-thumb indicator key changes). The user has a hard time seeing the small indicator change against the full green base layer.
+- None.
 
 ## Done
+- ~~Change the base layer RGB colour when Hebrew is active~~ Completed: only the dominant Oryx base colour becomes blue; manually assigned colours remain unchanged.
 - ~~Update git remote URL~~ Completed: remote points to `YiftahCooper/Moonlander-Custom-Config`
