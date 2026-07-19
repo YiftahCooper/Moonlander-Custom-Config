@@ -224,5 +224,102 @@ class TripleTapPatchTests(unittest.TestCase):
             PATCH_KEYMAP._patch_triple_tap_text_tools(fixture)
 
 
+class LanguageRgbOverlayPatchTests(unittest.TestCase):
+    def test_current_oryx_base_colour_is_detected_from_layer_zero(self):
+        self.assertEqual(
+            PATCH_KEYMAP._detect_base_layer_hsv(load_fixture()),
+            (83, 233, 240),
+        )
+
+    def test_black_leds_are_excluded_from_base_colour_detection(self):
+        fixture = """
+const uint8_t PROGMEM ledmap[][RGB_MATRIX_LED_COUNT][3] = {
+    [0] = { {0,0,0}, {0,0,0}, {10,20,30}, {10,20,30}, {40,50,60} },
+};
+"""
+        self.assertEqual(
+            PATCH_KEYMAP._detect_base_layer_hsv(fixture),
+            (10, 20, 30),
+        )
+
+    def test_ambiguous_base_colour_fails_instead_of_guessing(self):
+        fixture = """
+const uint8_t PROGMEM ledmap[][RGB_MATRIX_LED_COUNT][3] = {
+    [0] = { {10,20,30}, {10,20,30}, {40,50,60}, {40,50,60} },
+};
+"""
+        with self.assertRaisesRegex(RuntimeError, "(?i)unique.*base.*colour"):
+            PATCH_KEYMAP._detect_base_layer_hsv(fixture)
+
+    def test_base_colour_contract_is_injected_once_and_is_idempotent(self):
+        fixture = load_fixture().replace(
+            "/* ORYX_LANG_BASE_COLOR_PATCH */\n"
+            "#define MOONLANDER_BASE_H 83\n"
+            "#define MOONLANDER_BASE_S 233\n"
+            "#define MOONLANDER_BASE_V 240\n",
+            "",
+            1,
+        )
+        once, changed = PATCH_KEYMAP._inject_language_base_hsv(
+            fixture, (83, 233, 240)
+        )
+        twice, second_changed = PATCH_KEYMAP._inject_language_base_hsv(
+            once, (83, 233, 240)
+        )
+
+        self.assertTrue(changed)
+        self.assertFalse(second_changed)
+        self.assertEqual(twice, once)
+        self.assertEqual(once.count("ORYX_LANG_BASE_COLOR_PATCH"), 1)
+        self.assertIn("#define MOONLANDER_BASE_H 83", once)
+        self.assertIn("#define MOONLANDER_BASE_S 233", once)
+        self.assertIn("#define MOONLANDER_BASE_V 240", once)
+
+    def test_rgb_hook_migrates_before_caps_lock_and_removes_legacy_indicator(self):
+        patched, _ = PATCH_KEYMAP._inject_custom_language_prototypes(load_fixture())
+        patched, changed = PATCH_KEYMAP._patch_rgb_indicator_hook(patched)
+        body, found = PATCH_KEYMAP._get_function_body(
+            patched, "rgb_matrix_indicators_user"
+        )
+
+        self.assertTrue(changed)
+        self.assertTrue(found)
+        self.assertNotIn("custom_language_rgb_indicator", patched)
+        self.assertEqual(body.count("custom_language_rgb_overlay();"), 1)
+        self.assertLess(
+            body.index("custom_language_rgb_overlay();"),
+            body.index("if (capslock_active"),
+        )
+
+    def test_language_prototypes_are_canonicalized_to_the_overlay(self):
+        patched, changed = PATCH_KEYMAP._inject_custom_language_prototypes(
+            load_fixture()
+        )
+
+        self.assertTrue(changed)
+        self.assertIn("void custom_language_rgb_overlay(void);", patched)
+        self.assertNotIn("void custom_language_rgb_indicator(void);", patched)
+        twice, _ = PATCH_KEYMAP._inject_custom_language_prototypes(patched)
+        self.assertEqual(twice, patched)
+
+    def test_custom_code_recolours_only_exact_base_matches_to_scaled_blue(self):
+        source = (ROOT / "custom_qmk" / "custom_code.c").read_text(encoding="utf-8")
+
+        self.assertIn("void custom_language_rgb_overlay(void)", source)
+        self.assertIn("if (!custom_language_is_hebrew())", source)
+        self.assertIn("if (keyboard_config.disable_layer_led)", source)
+        self.assertIn("get_highest_layer(layer_state) != 0", source)
+        self.assertIn("MOONLANDER_BASE_H", source)
+        self.assertIn("MOONLANDER_BASE_S", source)
+        self.assertIn("MOONLANDER_BASE_V", source)
+        self.assertIn("LANGUAGE_HEBREW_BASE_R = 40", source)
+        self.assertIn("LANGUAGE_HEBREW_BASE_G = 140", source)
+        self.assertIn("LANGUAGE_HEBREW_BASE_B = 255", source)
+        self.assertIn("rgb_matrix_config.hsv.v", source)
+        self.assertIn("pgm_read_byte(&ledmap[0][led][0])", source)
+        self.assertNotIn("custom_language_indicator_led", source)
+        self.assertNotIn("LANGUAGE_ENGLISH_R", source)
+
+
 if __name__ == "__main__":
     unittest.main()

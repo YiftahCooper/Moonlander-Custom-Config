@@ -28,11 +28,11 @@
 - Produces: `_detect_base_layer_hsv(content: str) -> tuple[int, int, int]`
 - Produces: `_inject_language_base_hsv(content: str, hsv: tuple[int, int, int]) -> tuple[str, bool]`
 
-- [ ] **Step 1: Add failing detection and injection tests**
+- [x] **Step 1: Add failing detection and injection tests**
 
 Assert the current fixture detects `(83, 233, 240)`, excludes `{0,0,0}`, rejects tied dominant colours, and injects one canonical macro block.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 ```powershell
 python -m unittest tests.test_patch_keymap.LanguageRgbOverlayPatchTests -v
@@ -40,7 +40,7 @@ python -m unittest tests.test_patch_keymap.LanguageRgbOverlayPatchTests -v
 
 Expected: failure because the detection and injection functions do not exist.
 
-- [ ] **Step 3: Implement the minimal parser and macro injector**
+- [x] **Step 3: Implement the minimal parser and macro injector**
 
 Parse the balanced initializer for `ledmap[0]`, count non-black `{h,s,v}` triplets with `Counter`, require one unique maximum, and inject:
 
@@ -51,7 +51,7 @@ Parse the balanced initializer for `ledmap[0]`, count non-black `{h,s,v}` triple
 #define MOONLANDER_BASE_V 240
 ```
 
-- [ ] **Step 4: Run the focused tests and verify GREEN**
+- [x] **Step 4: Run the focused tests and verify GREEN**
 
 Run the focused command from Step 2 and require all tests to pass.
 
@@ -69,11 +69,11 @@ Run the focused command from Step 2 and require all tests to pass.
 - Produces: `void custom_language_rgb_overlay(void)`
 - Consumes: `MOONLANDER_BASE_H`, `MOONLANDER_BASE_S`, `MOONLANDER_BASE_V`, `ledmap[0]`, `rawhid_state.status_led_control`
 
-- [ ] **Step 1: Add failing overlay and migration tests**
+- [x] **Step 1: Add failing overlay and migration tests**
 
 Verify the generated hook is before the Caps Lock block, the legacy `custom_language_rgb_indicator()` call and prototype are absent, only exact base HSV matches are recoloured, the target is `RGB {40,140,255}`, and English/non-base layers return without changes.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 ```powershell
 python -m unittest tests.test_patch_keymap.LanguageRgbOverlayPatchTests -v
@@ -81,15 +81,15 @@ python -m unittest tests.test_patch_keymap.LanguageRgbOverlayPatchTests -v
 
 Expected: failures against the current blue/red single-key implementation.
 
-- [ ] **Step 3: Implement the overlay and canonical patch migration**
+- [x] **Step 3: Implement the overlay and canonical patch migration**
 
 Have the custom overlay loop through `ledmap[0]`, compare each original HSV triplet with the injected macros, scale `40/140/255` by `rgb_matrix_config.hsv.v`, and set only matching LEDs. Canonicalize prototypes and move the hook before Caps Lock.
 
-- [ ] **Step 4: Regenerate and verify idempotence**
+- [x] **Step 4: Regenerate and verify idempotence**
 
 Run the patcher twice on `3aMQz` and require the second pass to leave `keymap.c` byte-identical.
 
-- [ ] **Step 5: Run complete verification**
+- [x] **Step 5: Run complete verification**
 
 ```powershell
 python -m unittest discover -s tests -v
@@ -101,6 +101,6 @@ git diff --check
 
 Expected: every suite passes and the diff check is clean.
 
-- [ ] **Step 6: Commit to main**
+- [x] **Step 6: Commit to main**
 
 Commit the specification, plan, tests, patcher, custom firmware source, generated snapshot, and README together after verification.

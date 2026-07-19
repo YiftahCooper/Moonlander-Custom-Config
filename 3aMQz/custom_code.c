@@ -46,15 +46,11 @@ static bool bass_active[MATRIX_ROWS][MATRIX_COLS];
 #endif  // MIDI_ADVANCED
 
 static bool language_is_hebrew = false;
-// The language tap-dance key is on matrix [4,0] in this Moonlander layout.
-static const uint8_t LANGUAGE_INDICATOR_ROW = 4;
-static const uint8_t LANGUAGE_INDICATOR_COL = 0;
-static const uint8_t LANGUAGE_ENGLISH_R = 40;
-static const uint8_t LANGUAGE_ENGLISH_G = 140;
-static const uint8_t LANGUAGE_ENGLISH_B = 255;
-static const uint8_t LANGUAGE_HEBREW_R = 255;
-static const uint8_t LANGUAGE_HEBREW_G = 0;
-static const uint8_t LANGUAGE_HEBREW_B = 0;
+// Hebrew uses the former English-indicator blue for Oryx's detected base
+// colour. All other per-key Oryx colours remain untouched.
+static const uint8_t LANGUAGE_HEBREW_BASE_R = 40;
+static const uint8_t LANGUAGE_HEBREW_BASE_G = 140;
+static const uint8_t LANGUAGE_HEBREW_BASE_B = 255;
 static const uint16_t LANGUAGE_TOGGLE_GUARD_MS = 250;
 
 // Suppress duplicate language flips caused by accidental re-triggering/bounce.
@@ -68,17 +64,6 @@ static bool language_toggle_guard_allows_action(void) {
     language_toggle_timer = timer_read();
     language_toggle_guard_armed = true;
     return true;
-}
-
-static uint8_t custom_language_indicator_led(void) {
-#ifdef RGB_MATRIX_ENABLE
-    if (LANGUAGE_INDICATOR_ROW >= MATRIX_ROWS || LANGUAGE_INDICATOR_COL >= MATRIX_COLS) {
-        return NO_LED;
-    }
-    return g_led_config.matrix_co[LANGUAGE_INDICATOR_ROW][LANGUAGE_INDICATOR_COL];
-#else
-    return NO_LED;
-#endif
 }
 
 void custom_language_toggled(void) {
@@ -100,43 +85,52 @@ void custom_language_resync(void) {
     if (!language_toggle_guard_allows_action()) {
         return;
     }
-    // Force a known baseline: English + default indicator color.
+    // Force a known baseline: English + the unmodified Oryx base layer.
     language_is_hebrew = false;
 }
 
-void custom_language_rgb_indicator(void) {
+static bool custom_language_is_hebrew(void) {
+#ifdef RAW_ENABLE
+    // Oryx owns raw_hid_receive(), so host sync piggybacks on
+    // ORYX_STATUS_LED_CONTROL. Windhawk writes 0 for English and 1 for Hebrew.
+    return rawhid_state.status_led_control;
+#else
+    return language_is_hebrew;
+#endif
+}
+
+void custom_language_rgb_overlay(void) {
 #ifdef RGB_MATRIX_ENABLE
-    // Bug 5: only drive the language indicator color on the BASE layer (0).
-    // On other layers (e.g. the MIDI layer 2, where this physical key is a bass
-    // key) the Oryx-configured per-layer color must win, so we do nothing.
+    if (keyboard_config.disable_layer_led) {
+        return;
+    }
     if (get_highest_layer(layer_state) != 0) {
         return;
     }
-
-    uint8_t r = 0;
-    uint8_t g = 0;
-    uint8_t b = 0;
-    bool is_hebrew = language_is_hebrew;
-
-#ifdef RAW_ENABLE
-    // Oryx owns raw_hid_receive(), so host sync piggybacks on ORYX_STATUS_LED_CONTROL.
-    // The host bridge updates rawhid_state.status_led_control to 0 (EN) / 1 (HE).
-    is_hebrew = rawhid_state.status_led_control;
-#endif
-
-    if (is_hebrew) {
-        r = LANGUAGE_HEBREW_R;
-        g = LANGUAGE_HEBREW_G;
-        b = LANGUAGE_HEBREW_B;
-    } else {
-        r = LANGUAGE_ENGLISH_R;
-        g = LANGUAGE_ENGLISH_G;
-        b = LANGUAGE_ENGLISH_B;
+    if (!custom_language_is_hebrew()) {
+        return;
     }
 
-    uint8_t led = custom_language_indicator_led();
-    if (led != NO_LED) {
-        rgb_matrix_set_color(led, r, g, b);
+#if !defined(MOONLANDER_BASE_H) || !defined(MOONLANDER_BASE_S) || !defined(MOONLANDER_BASE_V)
+#error "patch_keymap.py must inject the Oryx layer-0 base colour"
+#endif
+
+    // Match the brightness behavior of Oryx's layer renderer while retaining
+    // the exact former indicator hue at maximum brightness.
+    float brightness = (float)rgb_matrix_config.hsv.v / UINT8_MAX;
+    uint8_t r = (uint8_t)(LANGUAGE_HEBREW_BASE_R * brightness);
+    uint8_t g = (uint8_t)(LANGUAGE_HEBREW_BASE_G * brightness);
+    uint8_t b = (uint8_t)(LANGUAGE_HEBREW_BASE_B * brightness);
+
+    for (uint8_t led = 0; led < RGB_MATRIX_LED_COUNT; ++led) {
+        uint8_t h = pgm_read_byte(&ledmap[0][led][0]);
+        uint8_t s = pgm_read_byte(&ledmap[0][led][1]);
+        uint8_t v = pgm_read_byte(&ledmap[0][led][2]);
+        if (h == MOONLANDER_BASE_H &&
+            s == MOONLANDER_BASE_S &&
+            v == MOONLANDER_BASE_V) {
+            rgb_matrix_set_color(led, r, g, b);
+        }
     }
 #endif
 }

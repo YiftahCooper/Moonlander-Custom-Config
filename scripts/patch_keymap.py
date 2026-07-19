@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+from collections import Counter
 from typing import Callable
 
 PATCH_MARKER = "ORYX_FN24_NUMDOT_SPACE_PATCH"
@@ -11,6 +12,7 @@ MIDI_LAYER_INDEX = 2
 LANGUAGE_TOGGLE_MARKER = "ORYX_LANG_TOGGLE_PATCH"
 LANGUAGE_RESYNC_MARKER = "ORYX_LANG_RESYNC_PATCH"
 LANGUAGE_RGB_MARKER = "ORYX_LANG_RGB_PATCH"
+LANGUAGE_BASE_COLOR_MARKER = "ORYX_LANG_BASE_COLOR_PATCH"
 LANGUAGE_HOLD_PREF_MARKER = "ORYX_LANG_HOLD_PREF_PATCH"
 LANGUAGE_ON_DANCE_NOOP_MARKER = "ORYX_LANG_ON_DANCE_NOOP_PATCH"
 LANGUAGE_TAP_TERM_MARKER = "ORYX_LANG_TAP_TERM_PATCH"
@@ -636,26 +638,24 @@ def _replace_fn24_in_space_tap_dance(content: str, dance_indices: list[int]) -> 
 
 
 def _inject_custom_language_prototypes(content: str) -> tuple[str, bool]:
-    if "void custom_language_toggle(void);" in content:
-        return content, True
-
-    if "void custom_language_toggled(void);" in content:
-        content = content.replace(
-            "void custom_language_toggled(void);\n",
-            "void custom_language_toggled(void);\n"
-            "void custom_language_toggle(void);\n",
-            1,
-        )
-        return content, True
-
     prototype_block = (
         "\n// --- Custom language hooks (injected) ---\n"
         "void custom_language_toggled(void);\n"
         "void custom_language_toggle(void);\n"
         "void custom_language_resync(void);\n"
-        "void custom_language_rgb_indicator(void);\n"
+        "void custom_language_rgb_overlay(void);\n"
         "// ----------------------------------------\n"
     )
+
+    existing_block = re.compile(
+        r"\n// --- Custom language hooks \(injected\) ---\r?\n"
+        r".*?"
+        r"// ----------------------------------------\r?\n",
+        flags=re.DOTALL,
+    )
+    if existing_block.search(content):
+        updated = existing_block.sub(prototype_block, content, count=1)
+        return updated, True
 
     include_matches = list(re.finditer(r"^\s*#include[^\n]*\n", content, flags=re.MULTILINE))
     if include_matches:
@@ -664,6 +664,91 @@ def _inject_custom_language_prototypes(content: str) -> tuple[str, bool]:
         insert_idx = 0
 
     return content[:insert_idx] + prototype_block + content[insert_idx:], True
+
+
+def _detect_base_layer_hsv(content: str) -> tuple[int, int, int]:
+    """Return the unique most-common non-black HSV triplet in ledmap layer 0."""
+    ledmap_match = re.search(
+        r"\bconst\s+uint8_t\s+PROGMEM\s+ledmap\b[^=]*=\s*\{",
+        content,
+        flags=re.DOTALL,
+    )
+    if not ledmap_match:
+        raise RuntimeError("Could not find Oryx ledmap for language base colour")
+
+    ledmap_open = content.find("{", ledmap_match.start())
+    ledmap_close = _find_matching_brace(content, ledmap_open)
+    if ledmap_close == -1:
+        raise RuntimeError("Could not parse Oryx ledmap for language base colour")
+
+    layer_region = content[ledmap_open + 1 : ledmap_close]
+    layer_match = re.search(r"\[\s*0\s*\]\s*=\s*\{", layer_region)
+    if not layer_match:
+        raise RuntimeError("Could not find Oryx ledmap layer 0 for language base colour")
+
+    layer_open = ledmap_open + 1 + layer_region.find("{", layer_match.start())
+    layer_close = _find_matching_brace(content, layer_open)
+    if layer_close == -1 or layer_close > ledmap_close:
+        raise RuntimeError("Could not parse Oryx ledmap layer 0 for language base colour")
+
+    triplets = [
+        tuple(int(component) for component in match.groups())
+        for match in re.finditer(
+            r"\{\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\}",
+            content[layer_open + 1 : layer_close],
+        )
+    ]
+    if any(component > 255 for triplet in triplets for component in triplet):
+        raise RuntimeError("Oryx ledmap layer 0 contains an invalid HSV component")
+
+    counts = Counter(triplet for triplet in triplets if triplet != (0, 0, 0))
+    if not counts:
+        raise RuntimeError("Oryx ledmap layer 0 has no non-black base colour")
+
+    highest_count = max(counts.values())
+    candidates = [triplet for triplet, count in counts.items() if count == highest_count]
+    if len(candidates) != 1:
+        raise RuntimeError(
+            "Could not identify a unique dominant base colour in Oryx ledmap layer 0"
+        )
+    return candidates[0]
+
+
+def _inject_language_base_hsv(
+    content: str, hsv: tuple[int, int, int]
+) -> tuple[str, bool]:
+    """Inject the Oryx-derived base colour contract consumed by custom_code.c."""
+    h, s, v = hsv
+    block = (
+        f"/* {LANGUAGE_BASE_COLOR_MARKER} */\n"
+        f"#define MOONLANDER_BASE_H {h}\n"
+        f"#define MOONLANDER_BASE_S {s}\n"
+        f"#define MOONLANDER_BASE_V {v}\n"
+    )
+    existing = re.compile(
+        rf"^[ \t]*/\*\s*{re.escape(LANGUAGE_BASE_COLOR_MARKER)}\s*\*/\r?\n"
+        r"[ \t]*#define\s+MOONLANDER_BASE_H\s+\d+\r?\n"
+        r"[ \t]*#define\s+MOONLANDER_BASE_S\s+\d+\r?\n"
+        r"[ \t]*#define\s+MOONLANDER_BASE_V\s+\d+\r?\n",
+        flags=re.MULTILINE,
+    )
+    match = existing.search(content)
+    if match:
+        if match.group(0) == block:
+            return content, False
+        return content[: match.start()] + block + content[match.end() :], True
+    if LANGUAGE_BASE_COLOR_MARKER in content:
+        raise RuntimeError("Malformed injected language base colour contract")
+
+    prototype_end = content.find("// ----------------------------------------\n")
+    if prototype_end != -1:
+        insert_idx = prototype_end + len("// ----------------------------------------\n")
+    else:
+        include_matches = list(
+            re.finditer(r"^\s*#include[^\n]*\n", content, flags=re.MULTILINE)
+        )
+        insert_idx = include_matches[-1].end() if include_matches else 0
+    return content[:insert_idx] + block + content[insert_idx:], True
 
 
 def _patch_language_switch_tap_dance(content: str, dance_indices: list[int]) -> tuple[str, bool, bool]:
@@ -798,17 +883,28 @@ def _patch_rgb_indicator_hook(content: str) -> tuple[str, bool]:
     if not has_fn:
         return content, False
 
-    if "custom_language_rgb_indicator();" in body:
-        return content, True
-
-    body_new, return_n = re.subn(
-        r"\breturn\s+true\s*;",
-        f"custom_language_rgb_indicator(); /* {LANGUAGE_RGB_MARKER} */\n  return true;",
+    body_new = re.sub(
+        r"^[ \t]*custom_language_rgb_(?:indicator|overlay)\(\);[^\r\n]*"
+        r"(?:\r?\n|$)",
+        "",
         body,
-        count=1,
+        flags=re.MULTILINE,
     )
-    if return_n == 0:
-        body_new = body + f"\n  custom_language_rgb_indicator(); /* {LANGUAGE_RGB_MARKER} */\n"
+
+    capslock_match = re.search(
+        r"^(?P<indent>[ \t]*)if\s*\(\s*capslock_active\b",
+        body_new,
+        flags=re.MULTILINE,
+    )
+    hook = f"custom_language_rgb_overlay(); /* {LANGUAGE_RGB_MARKER} */\n"
+    if capslock_match:
+        hook = capslock_match.group("indent") + hook
+        body_new = body_new[: capslock_match.start()] + hook + body_new[capslock_match.start() :]
+    else:
+        return_match = re.search(r"\breturn\s+true\s*;", body_new)
+        if not return_match:
+            return content, False
+        body_new = body_new[: return_match.start()] + hook + body_new[return_match.start() :]
 
     return _replace_function_body(content, "rgb_matrix_indicators_user", body_new), True
 
@@ -1741,6 +1837,12 @@ def patch_keymap(layout_dir: str) -> None:
     if enable_language_injection or enable_language_rgb_hook_injection:
         # Add forward declarations for custom language hooks.
         content, _ = _inject_custom_language_prototypes(content)
+        base_layer_hsv = _detect_base_layer_hsv(content)
+        content, _ = _inject_language_base_hsv(content, base_layer_hsv)
+        print(
+            "Detected Oryx layer-0 base colour for Hebrew overlay: "
+            f"HSV {base_layer_hsv}"
+        )
     else:
         print("Skipping language prototype injection (Oryx-managed language behavior).")
 
@@ -1773,9 +1875,9 @@ def patch_keymap(layout_dir: str) -> None:
     if enable_language_rgb_hook_injection:
         content, rgb_patched = _patch_rgb_indicator_hook(content)
         if rgb_patched:
-            print("Patched rgb_matrix_indicators_user with custom language indicator hook")
+            print("Patched rgb_matrix_indicators_user with Hebrew base-colour overlay hook")
         else:
-            print("Warning: rgb_matrix_indicators_user not found; language RGB indicator hook not applied.")
+            print("Warning: rgb_matrix_indicators_user not found; language RGB overlay hook not applied.")
     else:
         print("Skipping language RGB indicator hook patching (Oryx-managed language behavior).")
 

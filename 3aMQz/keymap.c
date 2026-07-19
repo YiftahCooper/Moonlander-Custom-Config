@@ -5,8 +5,12 @@
 void custom_language_toggled(void);
 void custom_language_toggle(void);
 void custom_language_resync(void);
-void custom_language_rgb_indicator(void);
+void custom_language_rgb_overlay(void);
 // ----------------------------------------
+/* ORYX_LANG_BASE_COLOR_PATCH */
+#define MOONLANDER_BASE_H 83
+#define MOONLANDER_BASE_S 233
+#define MOONLANDER_BASE_V 240
 #define MOON_LED_LEVEL LED_LEVEL
 #ifndef ZSA_SAFE_RANGE
 #define ZSA_SAFE_RANGE SAFE_RANGE
@@ -219,11 +223,11 @@ bool rgb_matrix_indicators_user(void) {
     }
   }
 
+  custom_language_rgb_overlay(); /* ORYX_LANG_RGB_PATCH */
   if (capslock_active && biton32(layer_state) == 0) {
     RGB rgb = hsv_to_rgb_with_value((HSV) { 0, 252, 242 });
     rgb_matrix_set_color( 32, rgb.r, rgb.g, rgb.b );
   } 
-  custom_language_rgb_indicator(); /* ORYX_LANG_RGB_PATCH */
   return true;
 }
 

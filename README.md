@@ -144,13 +144,11 @@ Three keys have reduced tapping terms to favor tapping over holding during fast 
 
 ### 2. Language-Aware RGB
 
-The left thumb indicator key (k40) lights **blue** (English) or **red** (Hebrew). State is synced from Windows over RAW HID using Oryx's `ORYX_STATUS_LED_CONTROL` command (`0x0A`):
+The base layer keeps its normal Oryx colours for **English**. For **Hebrew**, only Oryx's dominant base colour is replaced with the former indicator blue (`RGB 40, 140, 255`). State is synced from Windows over RAW HID using Oryx's `ORYX_STATUS_LED_CONTROL` command (`0x0A`):
 - Param[0] = `0x00` → English
 - Param[0] = `0x01` → Hebrew
 
-The indicator only acts on the base layer (Layer 0); other layers use Oryx-configured per-layer colors. This prevents the global language indicator from overriding customized per-key backlighting on higher layers.
-
-In future I will probably change things around so the entire base layer changes from green to a different color when Hebrew is active. I have a hard time seeing the key. 
+`patch_keymap.py` detects the unique most-common non-black HSV triplet in Oryx layer 0 and injects it as the base-colour contract. The Hebrew overlay changes only LEDs whose original Oryx colour exactly matches that triplet. Individually assigned colours—including the language key colour—remain under Oryx control, Caps Lock still overrides its own key, and all higher-layer colours remain unchanged. The blue overlay follows the keyboard's global brightness setting.
 
 ### 3. Tap-Dance Stabilization
 
@@ -197,7 +195,7 @@ Windhawk sends an Oryx-native RAW HID command to sync Windows language state to 
 - Transport: raw HID output report to any ZSA Moonlander device (filtered by manufacturer + product string)
 - Firmware reads mirrored state from `rawhid_state.status_led_control` in `custom_qmk/custom_code.c`
 
-The language RGB indicator only responds on Layer 0; MIDI and other layers use Oryx-configured per-layer colors.
+The language RGB overlay only responds on Layer 0; MIDI and other layers use Oryx-configured per-layer colours. The language key has no firmware colour override and can be assigned a fixed colour directly in Oryx.
 
 Troubleshooting:
 
