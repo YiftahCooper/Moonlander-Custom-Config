@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       layout_id:
-        description: "Layout id available in URL https://configure.zsa.io/voyager/layouts/[ID_IS_HERE]/latest"
+        description: "Layout id available in the Oryx layout URL"
         required: true
         default: "3aMQz"
       layout_geometry:
@@ -30,249 +30,302 @@ permissions:
 jobs:
   fetch-and-build-layout:
     runs-on: ubuntu-latest
+    env:
+      LAYOUT_ID: ${{ github.event.inputs.layout_id }}
+      LAYOUT_GEOMETRY: ${{ github.event.inputs.layout_geometry }}
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download layout source
-        id: download-layout-source
+      - name: Configure and validate runtime inputs
         run: |
-          response=$(curl --location 'https://oryx.zsa.io/graphql' --header 'Content-Type: application/json' --data '{"query":"query getLayout($hashId: String!, $revisionId: String!, $geometry: String) {layout(hashId: $hashId, geometry: $geometry, revisionId: $revisionId) {  revision { hashId, qmkVersion, title }}}","variables":{"hashId":"${{ github.event.inputs.layout_id }}","geometry":"${{ github.event.inputs.layout_geometry }}","revisionId":"latest"}}')
-          
-          echo "GraphQL Response: $response"
-          
-          json_data=$(echo "$response" | jq '.data.layout.revision | [.hashId, .qmkVersion, .title]')
-          hash_id=$(echo "${json_data}" | jq -r '.[0]')
-          firmware_version=$(printf "%.0f" $(echo "${json_data}" | jq -r '.[1]'))
-          change_description=$(echo "${json_data}" | jq -r '.[2]')
-          
-          if [[ "$hash_id" == "null" || -z "$hash_id" ]]; then
-            echo "Error: Could not retrieve layout hash."
-            exit 1
-          fi
-          
-          if [[ -z "${change_description}" || "${change_description}" == "null" ]]; then
+          set -euo pipefail
+          echo "QMK_DIR=${RUNNER_TEMP}/qmk_firmware" >> "$GITHUB_ENV"
+          python3 scripts/firmware_release.py validate-inputs \
+            --layout-id "${LAYOUT_ID}" \
+            --geometry "${LAYOUT_GEOMETRY}"
+
+      - name: Run repository firmware tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -v
+          python3 -m py_compile scripts/patch_keymap.py scripts/firmware_release.py
+
+      - name: Download and validate Oryx source
+        id: oryx
+        run: |
+          set -euo pipefail
+
+          jq -n \
+            --arg layout_id "${LAYOUT_ID}" \
+            --arg geometry "${LAYOUT_GEOMETRY}" \
+            '{
+              query: "query getLayout($hashId: String!, $revisionId: String!, $geometry: String) { layout(hashId: $hashId, geometry: $geometry, revisionId: $revisionId) { revision { hashId, qmkVersion, title } } }",
+              variables: {hashId: $layout_id, geometry: $geometry, revisionId: "latest"}
+            }' > graphql-request.json
+
+          curl --fail-with-body --silent --show-error --location \
+            --retry 3 --retry-all-errors \
+            'https://oryx.zsa.io/graphql' \
+            --header 'Content-Type: application/json' \
+            --data @graphql-request.json \
+            --output response.json
+
+          jq -e '(.errors // []) | length == 0' response.json > /dev/null
+          hash_id="$(jq -er '.data.layout.revision.hashId | strings | select(length > 0)' response.json)"
+          firmware_version="$(jq -er '.data.layout.revision.qmkVersion | numbers | select(floor == .)' response.json)"
+          change_description="$(jq -r '.data.layout.revision.title // "" | tostring' response.json)"
+          [[ "${hash_id}" =~ ^[A-Za-z0-9_-]+$ ]]
+          [[ "${firmware_version}" =~ ^[0-9]+$ ]]
+          change_description="${change_description//$'\r'/ }"
+          change_description="${change_description//$'\n'/ }"
+          if [ -z "${change_description}" ]; then
             change_description="latest layout modification made with Oryx"
           fi
-          
-          echo "Resolved Oryx latest revision: hash_id=${hash_id}, layout_id=${{ github.event.inputs.layout_id }}, geometry=${{ github.event.inputs.layout_geometry }}"
-          echo "Downloading source for hash: $hash_id"
-          curl -L "https://oryx.zsa.io/source/${hash_id}" -o source.zip
-          
-          # Verify zip
-          if ! unzip -t source.zip > /dev/null 2>&1; then
-            echo "Error: Invalid zip."
-            exit 1
-          fi
-          
-          echo firmware_version=${firmware_version} >> "$GITHUB_OUTPUT"
-          echo change_description=${change_description} >> "$GITHUB_OUTPUT"
-          echo hash_id=${hash_id} >> "$GITHUB_OUTPUT"
 
-      - name: Unzip the source file
-        run: |
-          # Unzip to a temporary directory 'oryx_source' instead of directly to layout ID
+          curl --fail-with-body --silent --show-error --location \
+            --retry 3 --retry-all-errors \
+            "https://oryx.zsa.io/source/${hash_id}" \
+            --output source.zip
+          unzip -t source.zip > /dev/null
+          rm -rf oryx_source
+          mkdir oryx_source
           unzip -oj source.zip '*_source/*' -d oryx_source
-          rm source.zip
+          rm source.zip graphql-request.json response.json
 
-      - name: Verify downloaded Oryx source before patch
-        id: prepatch-check
+          test -f "oryx_source/keymap.c"
+          test -f "oryx_source/config.h"
+          test -f "oryx_source/rules.mk"
+
+          echo "hash_id=${hash_id}" >> "$GITHUB_OUTPUT"
+          echo "firmware_version=${firmware_version}" >> "$GITHUB_OUTPUT"
+          echo "change_description=${change_description}" >> "$GITHUB_OUTPUT"
+
+      - name: Patch source and prove idempotence
+        id: patch
         run: |
           set -euo pipefail
-
-          echo "Verifying source for layout_id=${{ github.event.inputs.layout_id }} geometry=${{ github.event.inputs.layout_geometry }} hash_id=${{ steps.download-layout-source.outputs.hash_id }}"
-
-          test -f oryx_source/keymap.c
-          FN24_DANCE_COUNT=$( (grep -Eo "register_code16\(KC_F24\)|unregister_code16\(KC_F24\)" oryx_source/keymap.c || true) | wc -l | tr -d ' ' )
-          echo "FN24 tap-dance register/unregister occurrences before patch: ${FN24_DANCE_COUNT}"
-
-          if [ "${FN24_DANCE_COUNT}" -lt 1 ]; then
-            echo "No FN24 tap-dance register/unregister patterns found. Skipping strict FN24 replacement checks for this run."
-            echo "requires_fn24_patch=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "requires_fn24_patch=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Inject Custom Code (The Clever Bit)
-        run: |
-          set -euo pipefail
-
-          # Copy custom code to the source directory
           cp custom_qmk/custom_code.c oryx_source/
-          
-          # Run python patch script
           python3 scripts/patch_keymap.py oryx_source
-          
-          # Replace repo snapshot with freshly downloaded+patched files.
-          # Important: if layout folder already exists, `mv oryx_source <layout_id>` would
-          # nest the directory and leave stale files in place.
-          LAYOUT_ID="${{ github.event.inputs.layout_id }}"
+          first_digest="$(find oryx_source -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+          python3 scripts/patch_keymap.py oryx_source
+          second_digest="$(find oryx_source -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+          test "${first_digest}" = "${second_digest}"
+          echo "patched_tree_sha256=${second_digest}" >> "$GITHUB_OUTPUT"
+
           rm -rf "${LAYOUT_ID}"
           mv oryx_source "${LAYOUT_ID}"
 
-      - name: Verify patched keymap invariants
-        run: |
-          set -euo pipefail
-
-          LAYOUT_ID="${{ github.event.inputs.layout_id }}"
-          KEYMAP_PATH="${LAYOUT_ID}/keymap.c"
-          test -f "${KEYMAP_PATH}"
-
-          FN24_PATCH_MARKERS=$( (grep -o "ORYX_FN24_NUMDOT_SPACE_PATCH" "${KEYMAP_PATH}" || true) | wc -l | tr -d ' ' )
-          FN24_DANCE_AFTER=$( (grep -Eo "register_code16\(KC_F24\)|unregister_code16\(KC_F24\)" "${KEYMAP_PATH}" || true) | wc -l | tr -d ' ' )
-          echo "FN24 patch marker occurrences after patch: ${FN24_PATCH_MARKERS}"
-          echo "FN24 tap-dance register/unregister occurrences after patch: ${FN24_DANCE_AFTER}"
-
-          REQUIRE_FN24_PATCH="${{ steps.prepatch-check.outputs.requires_fn24_patch }}"
-          echo "requires_fn24_patch=${REQUIRE_FN24_PATCH}"
-
-          if [ "${REQUIRE_FN24_PATCH}" = "true" ]; then
-            if [ "${FN24_PATCH_MARKERS}" -lt 1 ]; then
-              echo "ERROR: FN24 replacement marker not found after patch; replacement did not apply."
-              exit 1
-            fi
-
-            if [ "${FN24_DANCE_AFTER}" -gt 0 ]; then
-              echo "ERROR: FN24 tap-dance register/unregister calls still present after patch; expected replacement did not complete."
-              exit 1
-            fi
-          else
-            echo "Skipping strict FN24 post-patch assertions because FN24 tap-dance patterns were absent in downloaded source."
-          fi
-
-
-      - name: Update QMK firmware submodule
+      - name: Resolve exact ZSA QMK revision
+        id: qmk
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Clone qmk_firmware if not present
-          if [ ! -d "qmk_firmware" ] || [ -z "$(ls -A qmk_firmware)" ]; then
-             rm -rf qmk_firmware
-             git clone --depth 1 https://github.com/zsa/qmk_firmware.git qmk_firmware
-          fi
-          cd qmk_firmware
-          git fetch --all --tags
-          FIRMWARE_BRANCH="firmware${{ steps.download-layout-source.outputs.firmware_version }}"
-          if git show-ref --verify --quiet refs/remotes/origin/$FIRMWARE_BRANCH; then
-            git checkout -B $FIRMWARE_BRANCH origin/$FIRMWARE_BRANCH
-          else
-            echo "Warning: Firmware branch $FIRMWARE_BRANCH not found, defaulting to master"
-            git checkout master
-          fi
-          git submodule update --init --recursive
-
-      - name: Build qmk docker image
-        run: docker build -t qmk .
-
-      - name: Build the layout
-        id: build-layout
+          FIRMWARE_VERSION: ${{ steps.oryx.outputs.firmware_version }}
         run: |
           set -euo pipefail
+          qmk_branch="firmware${FIRMWARE_VERSION}"
+          rm -rf "${QMK_DIR}"
+          git init "${QMK_DIR}"
+          git -C "${QMK_DIR}" remote add origin https://github.com/zsa/qmk_firmware.git
+          git -C "${QMK_DIR}" fetch --depth 1 origin \
+            "refs/heads/${qmk_branch}:refs/remotes/origin/${qmk_branch}"
+          qmk_commit="$(git -C "${QMK_DIR}" rev-parse "refs/remotes/origin/${qmk_branch}^{commit}")"
+          git -C "${QMK_DIR}" checkout --detach "${qmk_commit}"
+          git -C "${QMK_DIR}" submodule update --init --recursive --depth 1
+          echo "qmk_branch=${qmk_branch}" >> "$GITHUB_OUTPUT"
+          echo "qmk_commit=${qmk_commit}" >> "$GITHUB_OUTPUT"
 
-          if [ "${{ steps.download-layout-source.outputs.firmware_version }}" -ge 24 ]; then
-            keyboard_directory="qmk_firmware/keyboards/zsa"
+      - name: Build and identify QMK container
+        id: image
+        run: |
+          set -euo pipefail
+          image_tag="moonlander-qmk:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          base_tag="debian:bookworm-20260713-slim"
+          docker build --pull --tag "${image_tag}" .
+          container_base="$(docker image inspect "${base_tag}" --format '{{json .RepoDigests}}' | jq -er '.[0]')"
+          compiler_version="$(docker run --rm "${image_tag}" /bin/sh -c 'arm-none-eabi-gcc --version | head -n 1')"
+          python_version="$(docker run --rm "${image_tag}" python3 --version)"
+          test -n "${container_base}"
+          test -n "${compiler_version}"
+          test -n "${python_version}"
+          echo "Container base: ${container_base}"
+          echo "Compiler: ${compiler_version}"
+          echo "Python: ${python_version}"
+          echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
+          echo "container_base=${container_base}" >> "$GITHUB_OUTPUT"
+          echo "compiler_version=${compiler_version}" >> "$GITHUB_OUTPUT"
+          echo "python_version=${python_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Compile layout
+        env:
+          FIRMWARE_VERSION: ${{ steps.oryx.outputs.firmware_version }}
+          IMAGE_TAG: ${{ steps.image.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          if [ "${FIRMWARE_VERSION}" -ge 24 ]; then
+            keyboard_directory="${QMK_DIR}/keyboards/zsa"
             make_prefix="zsa/"
           else
-            keyboard_directory="qmk_firmware/keyboards"
+            keyboard_directory="${QMK_DIR}/keyboards"
             make_prefix=""
           fi
-          
-          # Copy patched layout files to the qmk folder
-          rm -rf ${keyboard_directory}/${{ github.event.inputs.layout_geometry }}/keymaps/${{ github.event.inputs.layout_id }}
-          mkdir -p ${keyboard_directory}/${{ github.event.inputs.layout_geometry }}/keymaps && cp -r ${{ github.event.inputs.layout_id }} "$_"
-          
-          docker run -v $(pwd)/qmk_firmware:/root --rm qmk /bin/sh -c "
-            make ${make_prefix}${{ github.event.inputs.layout_geometry }}:${{ github.event.inputs.layout_id }}
-          "
-          
-          layout_id="${{ github.event.inputs.layout_id }}"
-          normalized_layout_geometry="$(echo "${{ github.event.inputs.layout_geometry }}" | sed 's/\//_/g')"
-          bin_candidate="$(find ./qmk_firmware -maxdepth 1 -type f -name "*${normalized_layout_geometry}*${layout_id}*.bin" | head -n 1 || true)"
-          hex_candidate="$(find ./qmk_firmware -maxdepth 1 -type f -name "*${normalized_layout_geometry}*${layout_id}*.hex" | head -n 1 || true)"
+          keymap_directory="${keyboard_directory}/${LAYOUT_GEOMETRY}/keymaps/${LAYOUT_ID}"
+          rm -rf "${keymap_directory}"
+          mkdir -p "$(dirname "${keymap_directory}")"
+          cp -r "${LAYOUT_ID}" "${keymap_directory}"
+          find "${QMK_DIR}" -maxdepth 1 -type f \( -name '*.bin' -o -name '*.hex' \) -delete
+          docker run --rm --volume "${QMK_DIR}:/root" "${IMAGE_TAG}" \
+            /bin/sh -c "make ${make_prefix}${LAYOUT_GEOMETRY}:${LAYOUT_ID}"
 
-          if [ -n "${bin_candidate}" ]; then
-            built_firmware_file="${bin_candidate}"
-          elif [ -n "${hex_candidate}" ]; then
-            built_firmware_file="${hex_candidate}"
-          else
-            echo "ERROR: Could not find built firmware for ${normalized_layout_geometry}:${layout_id}."
-            echo "Available top-level firmware candidates:"
-            find ./qmk_firmware -maxdepth 1 -type f -name "*${normalized_layout_geometry}*" || true
-            exit 1
-          fi
-
-          if [ ! -s "${built_firmware_file}" ]; then
-            echo "ERROR: Built firmware file is missing or empty: ${built_firmware_file}"
-            exit 1
-          fi
-
-          if [[ "${{ github.event.inputs.layout_geometry }}" == moonlander/* ]] && [[ "${built_firmware_file}" != *.bin ]]; then
-            echo "ERROR: Moonlander build should produce .bin, but got: ${built_firmware_file}"
-            exit 1
-          fi
-
-          echo "Built firmware file: ${built_firmware_file}"
-          ls -lh "${built_firmware_file}"
-          file "${built_firmware_file}" || true
-
-          echo built_layout_file="${built_firmware_file}" >> "$GITHUB_OUTPUT"
-          echo normalized_layout_geometry=${normalized_layout_geometry} >> "$GITHUB_OUTPUT"
-
-      - name: Upload layout
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.build-layout.outputs.normalized_layout_geometry }}_${{ github.event.inputs.layout_id }}
-          path: ${{ steps.build-layout.outputs.built_layout_file }}
-
-      - name: Publish firmware release asset
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: firmware-${{ steps.build-layout.outputs.normalized_layout_geometry }}-${{ github.event.inputs.layout_id }}-${{ steps.download-layout-source.outputs.hash_id }}
-          name: Firmware ${{ steps.build-layout.outputs.normalized_layout_geometry }} ${{ github.event.inputs.layout_id }} @ ${{ steps.download-layout-source.outputs.hash_id }}
-          body: |
-            Built from Oryx layout `${{ github.event.inputs.layout_id }}` (`${{ github.event.inputs.layout_geometry }}`)
-            Oryx revision hash: `${{ steps.download-layout-source.outputs.hash_id }}`
-            Source change description: `${{ steps.download-layout-source.outputs.change_description }}`
-          files: ${{ steps.build-layout.outputs.built_layout_file }}
-          fail_on_unmatched_files: true
-          overwrite_files: true
-
-      - name: Commit synced layout folder to repository branch
-        if: ${{ success() }}
+      - name: Package verified firmware candidate
+        id: package
+        env:
+          QMK_BRANCH: ${{ steps.qmk.outputs.qmk_branch }}
+          QMK_COMMIT: ${{ steps.qmk.outputs.qmk_commit }}
+          ORYX_HASH: ${{ steps.oryx.outputs.hash_id }}
+          FIRMWARE_VERSION: ${{ steps.oryx.outputs.firmware_version }}
+          CONTAINER_BASE: ${{ steps.image.outputs.container_base }}
+          COMPILER_VERSION: ${{ steps.image.outputs.compiler_version }}
+          PYTHON_VERSION: ${{ steps.image.outputs.python_version }}
+          IMAGE_TAG: ${{ steps.image.outputs.image_tag }}
         run: |
           set -euo pipefail
+          metadata_path="${RUNNER_TEMP}/firmware-metadata.json"
+          jq -n \
+            --arg compiler "${COMPILER_VERSION}" \
+            --arg container_base "${CONTAINER_BASE}" \
+            --arg python "${PYTHON_VERSION}" \
+            --arg geometry "${LAYOUT_GEOMETRY}" \
+            --arg layout_id "${LAYOUT_ID}" \
+            --argjson qmk_version "${FIRMWARE_VERSION}" \
+            --arg revision "${ORYX_HASH}" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg source_commit "${GITHUB_SHA}" \
+            --arg qmk_branch "${QMK_BRANCH}" \
+            --arg qmk_commit "${QMK_COMMIT}" \
+            '{
+              build: {compiler: $compiler, container_base: $container_base, python: $python},
+              oryx: {geometry: $geometry, layout_id: $layout_id, qmk_version: $qmk_version, revision: $revision},
+              source: {repository: $repository, commit: $source_commit},
+              zsa_qmk: {branch: $qmk_branch, commit: $qmk_commit},
+              verification: {hardware_flash_witnessed: false, level: "ci-verified-candidate"}
+            }' > "${metadata_path}"
 
-          BRANCH="${GITHUB_REF_NAME:-main}"
-          LAYOUT_ID="${{ github.event.inputs.layout_id }}"
-          MSG="${{ steps.download-layout-source.outputs.change_description }}"
-          HASH_ID="${{ steps.download-layout-source.outputs.hash_id }}"
-          GEOMETRY="${{ github.event.inputs.layout_geometry }}"
+          rm -rf dist
+          python3 scripts/firmware_release.py package \
+            --qmk-dir "${QMK_DIR}" \
+            --dist-dir dist \
+            --metadata "${metadata_path}" > package-receipt.json
+          firmware="$(jq -er '.firmware' package-receipt.json)"
+          manifest="$(jq -er '.manifest' package-receipt.json)"
+          checksum="$(jq -er '.checksum' package-receipt.json)"
+          elf="$(jq -er '.elf' package-receipt.json)"
+          [[ "${manifest}" == *.manifest.json ]]
+          [[ "${checksum}" == *.sha256 ]]
+          elf_relative="${elf#${QMK_DIR}/}"
+          docker run --rm --volume "${QMK_DIR}:/root:ro" "${IMAGE_TAG}" \
+            arm-none-eabi-size "/root/${elf_relative}"
+          echo "firmware=${firmware}" >> "$GITHUB_OUTPUT"
+          echo "manifest=${manifest}" >> "$GITHUB_OUTPUT"
+          echo "checksum=${checksum}" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare unique release identity
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          QMK_COMMIT: ${{ steps.qmk.outputs.qmk_commit }}
+          ORYX_HASH: ${{ steps.oryx.outputs.hash_id }}
+        run: |
+          set -euo pipefail
+          normalized_geometry="${LAYOUT_GEOMETRY//\//_}"
+          source_short="${GITHUB_SHA:0:12}"
+          qmk_short="${QMK_COMMIT:0:12}"
+          release_tag="firmware-${normalized_geometry}-${LAYOUT_ID}-${ORYX_HASH}-${source_short}-${qmk_short}"
+          if gh release view "${release_tag}" > /dev/null 2>&1; then
+            needs_publish=false
+          else
+            needs_publish=true
+          fi
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+          echo "normalized_geometry=${normalized_geometry}" >> "$GITHUB_OUTPUT"
+          echo "needs_publish=${needs_publish}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload verified candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.release.outputs.normalized_geometry }}_${{ env.LAYOUT_ID }}_${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+
+      - name: Publish non-overwriting firmware release
+        if: steps.release.outputs.needs_publish == 'true'
+        uses: softprops/action-gh-release@c12583777ecdfd3be55c69cf75464299dc01057e # v3
+        with:
+          tag_name: ${{ steps.release.outputs.release_tag }}
+          name: Firmware ${{ steps.release.outputs.normalized_geometry }} ${{ env.LAYOUT_ID }}
+          target_commitish: ${{ github.sha }}
+          body: |
+            CI-verified candidate; physical flash not yet witnessed.
+
+            Oryx layout: `${{ env.LAYOUT_ID }}` (`${{ env.LAYOUT_GEOMETRY }}`)
+            Oryx revision: `${{ steps.oryx.outputs.hash_id }}`
+            Repository commit: `${{ github.sha }}`
+            ZSA QMK commit: `${{ steps.qmk.outputs.qmk_commit }}`
+            Source change: `${{ steps.oryx.outputs.change_description }}`
+          files: |
+            ${{ steps.package.outputs.firmware }}
+            ${{ steps.package.outputs.checksum }}
+            ${{ steps.package.outputs.manifest }}
+          fail_on_unmatched_files: true
+          overwrite_files: false
+
+      - name: Verify published release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          FIRMWARE: ${{ steps.package.outputs.firmware }}
+          CHECKSUM: ${{ steps.package.outputs.checksum }}
+          MANIFEST: ${{ steps.package.outputs.manifest }}
+        run: |
+          set -euo pipefail
+          gh release view "${RELEASE_TAG}" --json assets,tagName,targetCommitish > release.json
+          test "$(jq -r '.tagName' release.json)" = "${RELEASE_TAG}"
+          test "$(jq -r '.targetCommitish' release.json)" = "${GITHUB_SHA}"
+          test "$(jq '.assets | length' release.json)" -eq 3
+          expected_names="$(printf '%s\n' "$(basename "${FIRMWARE}")" "$(basename "${CHECKSUM}")" "$(basename "${MANIFEST}")" | sort)"
+          actual_names="$(jq -r '.assets[].name' release.json | sort)"
+          test "${expected_names}" = "${actual_names}"
+          for asset_path in "${FIRMWARE}" "${CHECKSUM}" "${MANIFEST}"; do
+            asset_name="$(basename "${asset_path}")"
+            expected_size="$(stat -c '%s' "${asset_path}")"
+            actual_size="$(jq -er --arg name "${asset_name}" '.assets[] | select(.name == $name) | .size' release.json)"
+            test "${expected_size}" = "${actual_size}"
+          done
+          verify_dir="$(mktemp -d)"
+          gh release download "${RELEASE_TAG}" --dir "${verify_dir}"
+          (
+            cd "${verify_dir}"
+            sha256sum --check "$(basename "${CHECKSUM}")"
+          )
+
+      - name: Commit synchronized Oryx snapshot
+        if: ${{ success() }}
+        env:
+          CHANGE_DESCRIPTION: ${{ steps.oryx.outputs.change_description }}
+          HASH_ID: ${{ steps.oryx.outputs.hash_id }}
+        run: |
+          set -euo pipefail
+          branch="${GITHUB_REF_NAME:-main}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # Do NOT checkout/reset here; we want to keep the freshly generated layout files
-          # from this run in the current workspace.
-
-          # Stage only the synced layout directory
-          git add "${LAYOUT_ID}"
-
+          git add -- "${LAYOUT_ID}"
           if git diff --cached --quiet; then
             echo "No layout changes to commit for ${LAYOUT_ID}."
             exit 0
           fi
-
-          git commit -m "${MSG:-Sync Oryx layout source} [oryx:${HASH_ID:-unknown} geom:${GEOMETRY}]"
-          
-          # Pull latest changes and rebase to prevent exit code 128 push failures
-          git pull --rebase origin "${BRANCH}"
-          
-          git push origin "HEAD:${BRANCH}"
-
-          echo "Git status for ${LAYOUT_ID} after push:"
-          git status --short -- "${LAYOUT_ID}"
-
+          git commit -m "${CHANGE_DESCRIPTION:-Sync Oryx layout source} [oryx:${HASH_ID} geom:${LAYOUT_GEOMETRY}]"
+          git pull --rebase origin "${branch}"
+          git push origin "HEAD:${branch}"

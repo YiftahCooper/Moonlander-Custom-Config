@@ -6,3 +6,6 @@ __pycache__/
 **/bin/
 **/obj/
 
+# Runtime-only ZSA QMK checkout used by local/CI builds
+/qmk_firmware/
+

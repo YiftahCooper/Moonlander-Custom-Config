@@ -17,7 +17,7 @@
 - Never overwrite an earlier firmware asset.
 - Preserve every prior release as rollback material.
 - A green workflow proves a CI-verified candidate, not a witnessed physical flash.
-- Pin GitHub Actions to full commit SHAs: checkout v6 `df4cb1c069e1874edd31b4311f1884172cec0e10`, upload-artifact v7 `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a`, action-gh-release v3 `3d0d9888cb7fd7b750713d6e236d1fcb99157228`.
+- Pin GitHub Actions to full commit SHAs: checkout v6 `df4cb1c069e1874edd31b4311f1884172cec0e10`, upload-artifact v7 `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a`, action-gh-release v3 `c12583777ecdfd3be55c69cf75464299dc01057e` (verified at implementation time on 2026-07-20).
 - Use `debian:bookworm-20260713-slim` as the dated build base; record its resolved image digest in every manifest.
 
 ---
@@ -346,7 +346,7 @@ Use exactly:
 ```yaml
 - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-- uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
+- uses: softprops/action-gh-release@c12583777ecdfd3be55c69cf75464299dc01057e # v3
 ```
 
 Upload the complete `dist/` inventory with `if-no-files-found: error`.
@@ -430,4 +430,3 @@ Keep the last known-good release. Do not delete or overwrite it. Report the new 
 - [ ] **Step 5: Correct only the failed stage if necessary**
 
 If the live run fails, preserve its logs and artifact, add a red-first regression at the failed boundary, change only the responsible task's files, rerun focused tests, and dispatch one corrected candidate. Do not repeat unrelated accepted work.
-

@@ -56,7 +56,7 @@ Working-Oryx-QMK-Sync/
 │   └── patch_keymap.py       ← 11+ deterministic transformations injected into Oryx source
 ├── host_tools/copyq/         ← CopyQ transformations, protected transaction, installer, tests
 ├── host_tools/reselect/      ← .NET 10 grapheme-aware reselection helper
-├── host_tools/windhawk/      ← Windows Windhawk mod (v2.0.0)
+├── host_tools/windhawk/      ← Windows Windhawk mod (v2.0.1)
 │   ├── moonlander_language_sync.wh.cpp  ← F18 language switching + RGB sync only
 │   └── deprecated/           ← Preserved v1.2.8 F19/F22 rollback source; do not delete on merge
 ├── .github/workflows/        ← CI: fetch Oryx → patch → build → release
@@ -65,8 +65,8 @@ Working-Oryx-QMK-Sync/
 │   ├── keymap.c              ← Oryx-generated + patched MIDI layer
 │   ├── config.h              ← MIDI_ADVANCED, low-latency settings
 │   └── rules.mk              ← MIDI_ENABLE = yes
-├── Dockerfile                ← Debian arm-none-eabi QMK build container
-└── qmk_firmware/           ← ZSA QMK fork (submodule, fetched at build time)
+├── Dockerfile                ← Dated Debian arm-none-eabi QMK build container
+└── qmk_firmware/             ← Ignored runtime-only ZSA QMK clone for local builds
 ```
 
 ## Features
@@ -268,12 +268,22 @@ Triggered manually via **Actions → Fetch and build layout** (`fetch-and-build-
 **Parameters**: Layout ID (`3aMQz`), geometry (`moonlander/reva`).
 
 **Steps**:
-1. Downloads Oryx source → `oryx_source/`
-2. Copies `custom_qmk/custom_code.c` → `oryx_source/`
-3. Runs `scripts/patch_keymap.py` on `oryx_source/` (11+ transformations)
-4. Builds via Docker using ZSA's QMK fork
-5. Publishes `.bin` as release artifact
-6. Commits patched snapshot to `3aMQz/`
+1. Validates the requested layout and Oryx response, then downloads a tested source ZIP.
+2. Runs the repository test suite before resolving QMK.
+3. Applies `scripts/patch_keymap.py` twice and requires byte-identical patched trees.
+4. Checks out the exact `firmware<version>` ZSA QMK branch at a recorded commit; missing branches fail instead of falling back to `master`.
+5. Builds in a dated container and records the base image digest, compiler, and Python versions.
+6. Requires exactly one non-empty firmware candidate and its matching ELF.
+7. Publishes a unique, non-overwriting release containing the `.bin`, its SHA-256 checksum, and a provenance manifest.
+8. Downloads the published assets and verifies their names and checksum before synchronizing `3aMQz/`.
+
+### Firmware assurance levels
+
+- **Build passed** → the source compiled successfully.
+- **CI-verified candidate** → tests, patch idempotence, exact QMK identity, closed artifact inventory, manifest, checksum, publication, and downloaded-asset verification all passed.
+- **Hardware accepted** → Wally, Keymapp, or ZSA's flasher successfully flashed that exact `.bin`, and the Moonlander reconnected and operated normally.
+
+A green workflow deliberately stops at **CI-verified candidate**. GitHub Actions cannot prove that the physical keyboard accepted the image.
 
 **What the patch script injects**:
 - MIDI custom-keycode enum near top of `keymap.c`
