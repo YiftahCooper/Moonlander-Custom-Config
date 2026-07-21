@@ -46,11 +46,8 @@ static bool bass_active[MATRIX_ROWS][MATRIX_COLS];
 #endif  // MIDI_ADVANCED
 
 static bool language_is_hebrew = false;
-// Hebrew uses the former English-indicator blue for Oryx's detected base
-// colour. All other per-key Oryx colours remain untouched.
-static const uint8_t LANGUAGE_HEBREW_BASE_R = 40;
-static const uint8_t LANGUAGE_HEBREW_BASE_G = 140;
-static const uint8_t LANGUAGE_HEBREW_BASE_B = 255;
+// Hebrew replaces only Oryx's detected layer-0 base colour with the detected
+// dominant colour from layer 5. All other per-key Oryx colours remain untouched.
 static const uint16_t LANGUAGE_TOGGLE_GUARD_MS = 250;
 
 // Suppress duplicate language flips caused by accidental re-triggering/bounce.
@@ -111,16 +108,18 @@ void custom_language_rgb_overlay(void) {
         return;
     }
 
-#if !defined(MOONLANDER_BASE_H) || !defined(MOONLANDER_BASE_S) || !defined(MOONLANDER_BASE_V)
-#error "patch_keymap.py must inject the Oryx layer-0 base colour"
+#if !defined(MOONLANDER_BASE_H) || !defined(MOONLANDER_BASE_S) || !defined(MOONLANDER_BASE_V) || \
+    !defined(MOONLANDER_HEBREW_H) || !defined(MOONLANDER_HEBREW_S) || !defined(MOONLANDER_HEBREW_V)
+#error "patch_keymap.py must inject the Oryx layer-0 and layer-5 language colours"
 #endif
 
-    // Match the brightness behavior of Oryx's layer renderer while retaining
-    // the exact former indicator hue at maximum brightness.
-    float brightness = (float)rgb_matrix_config.hsv.v / UINT8_MAX;
-    uint8_t r = (uint8_t)(LANGUAGE_HEBREW_BASE_R * brightness);
-    uint8_t g = (uint8_t)(LANGUAGE_HEBREW_BASE_G * brightness);
-    uint8_t b = (uint8_t)(LANGUAGE_HEBREW_BASE_B * brightness);
+    // Use Oryx's own conversion path so the source hue, saturation, configured
+    // value, and global brightness behave exactly like layer 5.
+    RGB hebrew_rgb = hsv_to_rgb_with_value((HSV){
+        .h = MOONLANDER_HEBREW_H,
+        .s = MOONLANDER_HEBREW_S,
+        .v = MOONLANDER_HEBREW_V,
+    });
 
     for (uint8_t led = 0; led < RGB_MATRIX_LED_COUNT; ++led) {
         uint8_t h = pgm_read_byte(&ledmap[0][led][0]);
@@ -129,7 +128,7 @@ void custom_language_rgb_overlay(void) {
         if (h == MOONLANDER_BASE_H &&
             s == MOONLANDER_BASE_S &&
             v == MOONLANDER_BASE_V) {
-            rgb_matrix_set_color(led, r, g, b);
+            rgb_matrix_set_color(led, hebrew_rgb.r, hebrew_rgb.g, hebrew_rgb.b);
         }
     }
 #endif

@@ -666,8 +666,10 @@ def _inject_custom_language_prototypes(content: str) -> tuple[str, bool]:
     return content[:insert_idx] + prototype_block + content[insert_idx:], True
 
 
-def _detect_base_layer_hsv(content: str) -> tuple[int, int, int]:
-    """Return the unique most-common non-black HSV triplet in ledmap layer 0."""
+def _detect_dominant_layer_hsv(
+    content: str, layer_index: int
+) -> tuple[int, int, int]:
+    """Return the unique most-common non-black HSV triplet in a ledmap layer."""
     ledmap_match = re.search(
         r"\bconst\s+uint8_t\s+PROGMEM\s+ledmap\b[^=]*=\s*\{",
         content,
@@ -682,14 +684,18 @@ def _detect_base_layer_hsv(content: str) -> tuple[int, int, int]:
         raise RuntimeError("Could not parse Oryx ledmap for language base colour")
 
     layer_region = content[ledmap_open + 1 : ledmap_close]
-    layer_match = re.search(r"\[\s*0\s*\]\s*=\s*\{", layer_region)
+    layer_match = re.search(rf"\[\s*{layer_index}\s*\]\s*=\s*\{{", layer_region)
     if not layer_match:
-        raise RuntimeError("Could not find Oryx ledmap layer 0 for language base colour")
+        raise RuntimeError(
+            f"Could not find Oryx ledmap layer {layer_index} for language colour"
+        )
 
     layer_open = ledmap_open + 1 + layer_region.find("{", layer_match.start())
     layer_close = _find_matching_brace(content, layer_open)
     if layer_close == -1 or layer_close > ledmap_close:
-        raise RuntimeError("Could not parse Oryx ledmap layer 0 for language base colour")
+        raise RuntimeError(
+            f"Could not parse Oryx ledmap layer {layer_index} for language colour"
+        )
 
     triplets = [
         tuple(int(component) for component in match.groups())
@@ -699,37 +705,53 @@ def _detect_base_layer_hsv(content: str) -> tuple[int, int, int]:
         )
     ]
     if any(component > 255 for triplet in triplets for component in triplet):
-        raise RuntimeError("Oryx ledmap layer 0 contains an invalid HSV component")
+        raise RuntimeError(
+            f"Oryx ledmap layer {layer_index} contains an invalid HSV component"
+        )
 
     counts = Counter(triplet for triplet in triplets if triplet != (0, 0, 0))
     if not counts:
-        raise RuntimeError("Oryx ledmap layer 0 has no non-black base colour")
+        raise RuntimeError(
+            f"Oryx ledmap layer {layer_index} has no non-black colour"
+        )
 
     highest_count = max(counts.values())
     candidates = [triplet for triplet, count in counts.items() if count == highest_count]
     if len(candidates) != 1:
         raise RuntimeError(
-            "Could not identify a unique dominant base colour in Oryx ledmap layer 0"
+            f"Could not identify a unique dominant layer {layer_index} colour "
+            "in Oryx ledmap"
         )
     return candidates[0]
 
 
-def _inject_language_base_hsv(
-    content: str, hsv: tuple[int, int, int]
+def _inject_language_hsv_contract(
+    content: str,
+    base_hsv: tuple[int, int, int],
+    hebrew_hsv: tuple[int, int, int],
 ) -> tuple[str, bool]:
-    """Inject the Oryx-derived base colour contract consumed by custom_code.c."""
-    h, s, v = hsv
+    """Inject the Oryx-derived base and Hebrew colour contract."""
+    base_h, base_s, base_v = base_hsv
+    hebrew_h, hebrew_s, hebrew_v = hebrew_hsv
     block = (
         f"/* {LANGUAGE_BASE_COLOR_MARKER} */\n"
-        f"#define MOONLANDER_BASE_H {h}\n"
-        f"#define MOONLANDER_BASE_S {s}\n"
-        f"#define MOONLANDER_BASE_V {v}\n"
+        f"#define MOONLANDER_BASE_H {base_h}\n"
+        f"#define MOONLANDER_BASE_S {base_s}\n"
+        f"#define MOONLANDER_BASE_V {base_v}\n"
+        f"#define MOONLANDER_HEBREW_H {hebrew_h}\n"
+        f"#define MOONLANDER_HEBREW_S {hebrew_s}\n"
+        f"#define MOONLANDER_HEBREW_V {hebrew_v}\n"
     )
     existing = re.compile(
         rf"^[ \t]*/\*\s*{re.escape(LANGUAGE_BASE_COLOR_MARKER)}\s*\*/\r?\n"
         r"[ \t]*#define\s+MOONLANDER_BASE_H\s+\d+\r?\n"
         r"[ \t]*#define\s+MOONLANDER_BASE_S\s+\d+\r?\n"
-        r"[ \t]*#define\s+MOONLANDER_BASE_V\s+\d+\r?\n",
+        r"[ \t]*#define\s+MOONLANDER_BASE_V\s+\d+\r?\n"
+        r"(?:"
+        r"[ \t]*#define\s+MOONLANDER_HEBREW_H\s+\d+\r?\n"
+        r"[ \t]*#define\s+MOONLANDER_HEBREW_S\s+\d+\r?\n"
+        r"[ \t]*#define\s+MOONLANDER_HEBREW_V\s+\d+\r?\n"
+        r")?",
         flags=re.MULTILINE,
     )
     match = existing.search(content)
@@ -1837,11 +1859,15 @@ def patch_keymap(layout_dir: str) -> None:
     if enable_language_injection or enable_language_rgb_hook_injection:
         # Add forward declarations for custom language hooks.
         content, _ = _inject_custom_language_prototypes(content)
-        base_layer_hsv = _detect_base_layer_hsv(content)
-        content, _ = _inject_language_base_hsv(content, base_layer_hsv)
+        base_layer_hsv = _detect_dominant_layer_hsv(content, 0)
+        hebrew_layer_hsv = _detect_dominant_layer_hsv(content, 5)
+        content, _ = _inject_language_hsv_contract(
+            content, base_layer_hsv, hebrew_layer_hsv
+        )
         print(
-            "Detected Oryx layer-0 base colour for Hebrew overlay: "
-            f"HSV {base_layer_hsv}"
+            "Detected Oryx language colours: "
+            f"layer 0 base HSV {base_layer_hsv}; "
+            f"layer 5 Hebrew HSV {hebrew_layer_hsv}"
         )
     else:
         print("Skipping language prototype injection (Oryx-managed language behavior).")

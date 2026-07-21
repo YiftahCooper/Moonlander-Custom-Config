@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Recolour only Oryx's base colour to the former indicator blue while Hebrew is active.
+**Goal:** Recolour only Oryx's base colour to Layer 5's dominant turquoise while Hebrew is active.
 
-**Architecture:** The Python patcher detects the dominant non-black HSV triplet in generated layer 0 and injects it as a C contract. The custom QMK overlay uses that contract and the existing RAW HID language state to recolour exact matches before Caps Lock is rendered.
+**Architecture:** The Python patcher detects the dominant non-black HSV triplets in generated layers 0 and 5 and injects them as a C contract. The custom QMK overlay uses the layer-0 value as an exact-match filter and renders the layer-5 value through Oryx's brightness-aware HSV conversion before Caps Lock is rendered.
 
 **Tech Stack:** Python 3, `unittest`, generated QMK C, Oryx RGB Matrix ledmap.
 
 ## Global Constraints
 
 - English renders the unmodified Oryx base layer.
-- Hebrew replaces only the dominant non-black base-layer colour with brightness-scaled `RGB {40, 140, 255}`.
+- Hebrew replaces only the dominant non-black base-layer colour with Layer 5's dominant non-black colour; the accepted layout value is `HSV {131, 252, 242}`.
 - Manually assigned colours and every higher layer remain unchanged.
 - The language key receives no firmware colour override.
 - The patcher remains idempotent and fails rather than guessing an ambiguous base colour.
@@ -104,3 +104,48 @@ Expected: every suite passes and the diff check is clean.
 - [x] **Step 6: Commit to main**
 
 Commit the specification, plan, tests, patcher, custom firmware source, generated snapshot, and README together after verification.
+
+### Task 3: Source the Hebrew colour from Oryx Layer 5
+
+**Files:**
+- Modify: `tests/test_patch_keymap.py`
+- Modify: `scripts/patch_keymap.py`
+- Modify: `custom_qmk/custom_code.c`
+- Modify: `3aMQz/custom_code.c`
+- Modify: `3aMQz/keymap.c`
+- Modify: `README.md`
+
+**Interfaces:**
+- Produces: `_detect_dominant_layer_hsv(content: str, layer_index: int) -> tuple[int, int, int]`
+- Produces: `MOONLANDER_HEBREW_H`, `MOONLANDER_HEBREW_S`, and `MOONLANDER_HEBREW_V`
+- Consumes: Oryx `ledmap[5]` and `hsv_to_rgb_with_value(HSV)`
+
+- [x] **Step 1: Add failing Layer 5 detection and renderer tests**
+
+Assert that the accepted generated snapshot detects layer 5 as `(131, 252, 242)`, injects all six macros exactly once, rejects a missing or ambiguous requested layer, uses `hsv_to_rgb_with_value()` in the overlay, and contains none of the former `LANGUAGE_HEBREW_BASE_R/G/B` constants.
+
+- [x] **Step 2: Run the focused tests and verify RED**
+
+```powershell
+python -m unittest tests.test_patch_keymap.LanguageRgbOverlayPatchTests -v
+```
+
+Expected: failure because Layer 5 detection and the HSV replacement contract do not exist.
+
+- [x] **Step 3: Implement the minimal general detector and six-macro contract**
+
+Generalize dominant-colour detection to a requested layer, detect layers 0 and 5 in the main patch flow, replace an existing three-macro block safely, and render the Hebrew HSV through `hsv_to_rgb_with_value()`.
+
+- [x] **Step 4: Regenerate and prove idempotence**
+
+Run `python scripts/patch_keymap.py 3aMQz` twice and require the second pass to leave the generated tree byte-identical.
+
+- [x] **Step 5: Run complete verification**
+
+```powershell
+python -m unittest discover -s tests -v
+python -m py_compile scripts/patch_keymap.py scripts/firmware_release.py
+git diff --check
+```
+
+Expected: all tests pass, both Python files compile, and the diff is clean.

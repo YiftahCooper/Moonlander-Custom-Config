@@ -144,11 +144,11 @@ Three keys have reduced tapping terms to favor tapping over holding during fast 
 
 ### 2. Language-Aware RGB
 
-The base layer keeps its normal Oryx colours for **English**. For **Hebrew**, only Oryx's dominant base colour is replaced with the former indicator blue (`RGB 40, 140, 255`). State is synced from Windows over RAW HID using Oryx's `ORYX_STATUS_LED_CONTROL` command (`0x0A`):
+The base layer keeps its normal Oryx colours for **English**. For **Hebrew**, only Oryx's dominant base colour is replaced with Layer 5's dominant turquoise (currently `HSV 131, 252, 242`). State is synced from Windows over RAW HID using Oryx's `ORYX_STATUS_LED_CONTROL` command (`0x0A`):
 - Param[0] = `0x00` → English
 - Param[0] = `0x01` → Hebrew
 
-`patch_keymap.py` detects the unique most-common non-black HSV triplet in Oryx layer 0 and injects it as the base-colour contract. The Hebrew overlay changes only LEDs whose original Oryx colour exactly matches that triplet. Individually assigned colours—including the language key colour—remain under Oryx control, Caps Lock still overrides its own key, and all higher-layer colours remain unchanged. The blue overlay follows the keyboard's global brightness setting.
+`patch_keymap.py` detects the unique most-common non-black HSV triplets in Oryx layers 0 and 5 and injects both as the language-colour contract. The Hebrew overlay changes only LEDs whose original layer-0 colour exactly matches its dominant triplet, rendering the replacement through Oryx's normal brightness-aware HSV path. Individually assigned colours—including the language key colour—remain under Oryx control, Caps Lock still overrides its own key, and all higher-layer colours remain unchanged.
 
 ### 3. Tap-Dance Stabilization
 

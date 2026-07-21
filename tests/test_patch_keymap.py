@@ -222,8 +222,14 @@ class TripleTapPatchTests(unittest.TestCase):
 class LanguageRgbOverlayPatchTests(unittest.TestCase):
     def test_current_oryx_base_colour_is_detected_from_layer_zero(self):
         self.assertEqual(
-            PATCH_KEYMAP._detect_base_layer_hsv(load_fixture()),
+            PATCH_KEYMAP._detect_dominant_layer_hsv(load_fixture(), 0),
             (83, 233, 240),
+        )
+
+    def test_current_oryx_hebrew_colour_is_detected_from_layer_five(self):
+        self.assertEqual(
+            PATCH_KEYMAP._detect_dominant_layer_hsv(load_fixture(), 5),
+            (131, 252, 242),
         )
 
     def test_black_leds_are_excluded_from_base_colour_detection(self):
@@ -233,33 +239,46 @@ const uint8_t PROGMEM ledmap[][RGB_MATRIX_LED_COUNT][3] = {
 };
 """
         self.assertEqual(
-            PATCH_KEYMAP._detect_base_layer_hsv(fixture),
+            PATCH_KEYMAP._detect_dominant_layer_hsv(fixture, 0),
             (10, 20, 30),
         )
 
-    def test_ambiguous_base_colour_fails_instead_of_guessing(self):
+    def test_ambiguous_requested_layer_colour_fails_instead_of_guessing(self):
         fixture = """
 const uint8_t PROGMEM ledmap[][RGB_MATRIX_LED_COUNT][3] = {
-    [0] = { {10,20,30}, {10,20,30}, {40,50,60}, {40,50,60} },
+    [0] = { {1,2,3} },
+    [5] = { {10,20,30}, {10,20,30}, {40,50,60}, {40,50,60} },
 };
 """
-        with self.assertRaisesRegex(RuntimeError, "(?i)unique.*base.*colour"):
-            PATCH_KEYMAP._detect_base_layer_hsv(fixture)
+        with self.assertRaisesRegex(RuntimeError, "(?i)unique.*layer 5.*colour"):
+            PATCH_KEYMAP._detect_dominant_layer_hsv(fixture, 5)
 
-    def test_base_colour_contract_is_injected_once_and_is_idempotent(self):
+    def test_missing_requested_layer_fails_instead_of_using_another_layer(self):
+        fixture = """
+const uint8_t PROGMEM ledmap[][RGB_MATRIX_LED_COUNT][3] = {
+    [0] = { {10,20,30}, {10,20,30} },
+};
+"""
+        with self.assertRaisesRegex(RuntimeError, "(?i)layer 5"):
+            PATCH_KEYMAP._detect_dominant_layer_hsv(fixture, 5)
+
+    def test_language_colour_contract_is_injected_once_and_is_idempotent(self):
         fixture = load_fixture().replace(
             "/* ORYX_LANG_BASE_COLOR_PATCH */\n"
             "#define MOONLANDER_BASE_H 83\n"
             "#define MOONLANDER_BASE_S 233\n"
-            "#define MOONLANDER_BASE_V 240\n",
+            "#define MOONLANDER_BASE_V 240\n"
+            "#define MOONLANDER_HEBREW_H 131\n"
+            "#define MOONLANDER_HEBREW_S 252\n"
+            "#define MOONLANDER_HEBREW_V 242\n",
             "",
             1,
         )
-        once, changed = PATCH_KEYMAP._inject_language_base_hsv(
-            fixture, (83, 233, 240)
+        once, changed = PATCH_KEYMAP._inject_language_hsv_contract(
+            fixture, (83, 233, 240), (131, 252, 242)
         )
-        twice, second_changed = PATCH_KEYMAP._inject_language_base_hsv(
-            once, (83, 233, 240)
+        twice, second_changed = PATCH_KEYMAP._inject_language_hsv_contract(
+            once, (83, 233, 240), (131, 252, 242)
         )
 
         self.assertTrue(changed)
@@ -269,6 +288,38 @@ const uint8_t PROGMEM ledmap[][RGB_MATRIX_LED_COUNT][3] = {
         self.assertIn("#define MOONLANDER_BASE_H 83", once)
         self.assertIn("#define MOONLANDER_BASE_S 233", once)
         self.assertIn("#define MOONLANDER_BASE_V 240", once)
+        self.assertIn("#define MOONLANDER_HEBREW_H 131", once)
+        self.assertIn("#define MOONLANDER_HEBREW_S 252", once)
+        self.assertIn("#define MOONLANDER_HEBREW_V 242", once)
+        self.assertEqual(once.count("#define MOONLANDER_HEBREW_H"), 1)
+
+    def test_legacy_three_macro_contract_is_migrated_without_duplicates(self):
+        current_block = (
+            "/* ORYX_LANG_BASE_COLOR_PATCH */\n"
+            "#define MOONLANDER_BASE_H 83\n"
+            "#define MOONLANDER_BASE_S 233\n"
+            "#define MOONLANDER_BASE_V 240\n"
+            "#define MOONLANDER_HEBREW_H 131\n"
+            "#define MOONLANDER_HEBREW_S 252\n"
+            "#define MOONLANDER_HEBREW_V 242\n"
+        )
+        legacy_block = (
+            "/* ORYX_LANG_BASE_COLOR_PATCH */\n"
+            "#define MOONLANDER_BASE_H 83\n"
+            "#define MOONLANDER_BASE_S 233\n"
+            "#define MOONLANDER_BASE_V 240\n"
+        )
+        fixture = load_fixture().replace(current_block, legacy_block, 1)
+
+        migrated, changed = PATCH_KEYMAP._inject_language_hsv_contract(
+            fixture, (83, 233, 240), (131, 252, 242)
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(migrated.count("ORYX_LANG_BASE_COLOR_PATCH"), 1)
+        self.assertEqual(migrated.count("#define MOONLANDER_HEBREW_H 131"), 1)
+        self.assertEqual(migrated.count("#define MOONLANDER_HEBREW_S 252"), 1)
+        self.assertEqual(migrated.count("#define MOONLANDER_HEBREW_V 242"), 1)
 
     def test_rgb_hook_migrates_before_caps_lock_and_removes_legacy_indicator(self):
         patched, _ = PATCH_KEYMAP._inject_custom_language_prototypes(load_fixture())
@@ -297,7 +348,7 @@ const uint8_t PROGMEM ledmap[][RGB_MATRIX_LED_COUNT][3] = {
         twice, _ = PATCH_KEYMAP._inject_custom_language_prototypes(patched)
         self.assertEqual(twice, patched)
 
-    def test_custom_code_recolours_only_exact_base_matches_to_scaled_blue(self):
+    def test_custom_code_recolours_only_exact_base_matches_with_layer_five_hsv(self):
         source = (ROOT / "custom_qmk" / "custom_code.c").read_text(encoding="utf-8")
 
         self.assertIn("void custom_language_rgb_overlay(void)", source)
@@ -307,10 +358,13 @@ const uint8_t PROGMEM ledmap[][RGB_MATRIX_LED_COUNT][3] = {
         self.assertIn("MOONLANDER_BASE_H", source)
         self.assertIn("MOONLANDER_BASE_S", source)
         self.assertIn("MOONLANDER_BASE_V", source)
-        self.assertIn("LANGUAGE_HEBREW_BASE_R = 40", source)
-        self.assertIn("LANGUAGE_HEBREW_BASE_G = 140", source)
-        self.assertIn("LANGUAGE_HEBREW_BASE_B = 255", source)
-        self.assertIn("rgb_matrix_config.hsv.v", source)
+        self.assertIn("MOONLANDER_HEBREW_H", source)
+        self.assertIn("MOONLANDER_HEBREW_S", source)
+        self.assertIn("MOONLANDER_HEBREW_V", source)
+        self.assertIn("hsv_to_rgb_with_value", source)
+        self.assertNotIn("LANGUAGE_HEBREW_BASE_R", source)
+        self.assertNotIn("LANGUAGE_HEBREW_BASE_G", source)
+        self.assertNotIn("LANGUAGE_HEBREW_BASE_B", source)
         self.assertIn("pgm_read_byte(&ledmap[0][led][0])", source)
         self.assertNotIn("custom_language_indicator_led", source)
         self.assertNotIn("LANGUAGE_ENGLISH_R", source)
