@@ -9,6 +9,10 @@ MIDI_ENUM_MARKER = "ORYX_MIDI_KEYCODE_ENUM_PATCH"
 MIDI_LAYER_MARKER = "ORYX_MIDI_LAYER2_PATCH"
 # The MIDI keys live on layer 2 (confirmed against the live Oryx export).
 MIDI_LAYER_INDEX = 2
+# Moonlander LED indices for the ten accidental (black piano) melody keys on
+# the MIDI layer: five on each half of the first key row. These are semantic
+# source positions, not a frequency-based colour guess.
+MIDI_ACCIDENTAL_LED_INDICES = (1, 6, 16, 21, 26, 42, 47, 52, 62, 66)
 LANGUAGE_TOGGLE_MARKER = "ORYX_LANG_TOGGLE_PATCH"
 LANGUAGE_RESYNC_MARKER = "ORYX_LANG_RESYNC_PATCH"
 LANGUAGE_RGB_MARKER = "ORYX_LANG_RGB_PATCH"
@@ -666,10 +670,10 @@ def _inject_custom_language_prototypes(content: str) -> tuple[str, bool]:
     return content[:insert_idx] + prototype_block + content[insert_idx:], True
 
 
-def _detect_dominant_layer_hsv(
+def _extract_ledmap_layer_hsv(
     content: str, layer_index: int
-) -> tuple[int, int, int]:
-    """Return the unique most-common non-black HSV triplet in a ledmap layer."""
+) -> list[tuple[int, int, int]]:
+    """Return every HSV triplet from one generated Oryx ledmap layer."""
     ledmap_match = re.search(
         r"\bconst\s+uint8_t\s+PROGMEM\s+ledmap\b[^=]*=\s*\{",
         content,
@@ -709,6 +713,16 @@ def _detect_dominant_layer_hsv(
             f"Oryx ledmap layer {layer_index} contains an invalid HSV component"
         )
 
+    if not triplets:
+        raise RuntimeError(f"Oryx ledmap layer {layer_index} has no LED colours")
+    return triplets
+
+
+def _detect_dominant_layer_hsv(
+    content: str, layer_index: int
+) -> tuple[int, int, int]:
+    """Return the unique most-common non-black HSV triplet in a ledmap layer."""
+    triplets = _extract_ledmap_layer_hsv(content, layer_index)
     counts = Counter(triplet for triplet in triplets if triplet != (0, 0, 0))
     if not counts:
         raise RuntimeError(
@@ -723,6 +737,29 @@ def _detect_dominant_layer_hsv(
             "in Oryx ledmap"
         )
     return candidates[0]
+
+
+def _detect_midi_accidental_hsv(content: str) -> tuple[int, int, int]:
+    """Return the shared Layer 2 colour of the ten black MIDI melody keys."""
+    triplets = _extract_ledmap_layer_hsv(content, MIDI_LAYER_INDEX)
+    last_required_index = max(MIDI_ACCIDENTAL_LED_INDICES)
+    if len(triplets) <= last_required_index:
+        raise RuntimeError(
+            "Oryx ledmap layer 2 is too short to identify all black MIDI keys"
+        )
+
+    colours = {triplets[index] for index in MIDI_ACCIDENTAL_LED_INDICES}
+    if len(colours) != 1:
+        raise RuntimeError(
+            "The ten black MIDI keys on Oryx layer 2 must all use the same colour"
+        )
+
+    colour = next(iter(colours))
+    if colour == (0, 0, 0):
+        raise RuntimeError(
+            "The black MIDI keys on Oryx layer 2 must use a non-black RGB colour"
+        )
+    return colour
 
 
 def _inject_language_hsv_contract(
@@ -1860,14 +1897,14 @@ def patch_keymap(layout_dir: str) -> None:
         # Add forward declarations for custom language hooks.
         content, _ = _inject_custom_language_prototypes(content)
         base_layer_hsv = _detect_dominant_layer_hsv(content, 0)
-        hebrew_layer_hsv = _detect_dominant_layer_hsv(content, 5)
+        hebrew_layer_hsv = _detect_midi_accidental_hsv(content)
         content, _ = _inject_language_hsv_contract(
             content, base_layer_hsv, hebrew_layer_hsv
         )
         print(
             "Detected Oryx language colours: "
             f"layer 0 base HSV {base_layer_hsv}; "
-            f"layer 5 Hebrew HSV {hebrew_layer_hsv}"
+            f"layer 2 black-MIDI-key Hebrew HSV {hebrew_layer_hsv}"
         )
     else:
         print("Skipping language prototype injection (Oryx-managed language behavior).")

@@ -9,6 +9,12 @@ WORKFLOW = ROOT / ".github" / "workflows" / "fetch-and-build-layout.yml"
 GITIGNORE = ROOT / ".gitignore"
 DOCKERFILE = ROOT / "Dockerfile"
 README = ROOT / "README.md"
+TODO = ROOT / "TODO.md"
+FIRMWARE_SPEC = ROOT / "docs" / "superpowers" / "specs" / "2026-07-19-firmware-build-assurance-design.md"
+FIRMWARE_PLAN = ROOT / "docs" / "superpowers" / "plans" / "2026-07-19-firmware-build-assurance.md"
+HEBREW_PLAN = ROOT / "docs" / "superpowers" / "plans" / "2026-07-19-hebrew-base-layer-colour.md"
+IMMEDIATE_TAP_SPEC = ROOT / "docs" / "superpowers" / "specs" / "2026-07-19-immediate-thumb-tap-actions-design.md"
+COPYQ_ASYNC_PLAN = ROOT / "docs" / "superpowers" / "plans" / "2026-07-18-copyq-asynchronous-text-transactions.md"
 GIT = shutil.which("git")
 if GIT is None:
     raise RuntimeError("Git is required for firmware workflow contract tests")
@@ -117,6 +123,35 @@ class FirmwareWorkflowContractTests(unittest.TestCase):
         self.assertIn("Hardware accepted", readme)
         self.assertIn("manifest", readme)
         self.assertNotIn("qmk_firmware/           ← ZSA QMK fork (submodule", readme)
+
+    def test_documentation_matches_the_accepted_runtime_and_release(self):
+        readme = README.read_text(encoding="utf-8")
+        firmware_spec = FIRMWARE_SPEC.read_text(encoding="utf-8")
+        firmware_plan = FIRMWARE_PLAN.read_text(encoding="utf-8")
+        hebrew_plan = HEBREW_PLAN.read_text(encoding="utf-8")
+        immediate_tap_spec = IMMEDIATE_TAP_SPEC.read_text(encoding="utf-8")
+        copyq_async_plan = COPYQ_ASYNC_PLAN.read_text(encoding="utf-8")
+
+        self.assertNotIn("transplaces", readme)
+        self.assertNotIn("Only custom code is tracked", readme)
+        self.assertNotIn("| F24 | Reserved |", readme)
+        self.assertIn("**F24** | **Free**", readme)
+        self.assertIn("29808688464", readme)
+        self.assertIn("v6Grvl", readme)
+        self.assertIn("717745325af7e8c92a1ec78faaa9abf8db321d5e", readme)
+        self.assertIn("git init qmk_firmware", readme)
+        self.assertNotIn("git clone --depth 1 https://github.com/zsa/qmk_firmware.git", readme)
+
+        self.assertIn("29808688464", firmware_spec)
+        self.assertNotIn("Checkout cleanup still emitted", firmware_spec)
+        self.assertNotIn("Dockerfile` uses floating `debian:latest", firmware_spec)
+        self.assertNotIn("RGB {40,140,255}", hebrew_plan)
+        self.assertNotIn("will replace only", immediate_tap_spec)
+        self.assertNotIn("- [ ]", firmware_plan)
+        self.assertNotIn("- [ ]", copyq_async_plan)
+        todo = TODO.read_text(encoding="utf-8").lower()
+        self.assertIn("black midi", todo)
+        self.assertIn("hsv 12, 255, 255", todo)
 
 
 if __name__ == "__main__":

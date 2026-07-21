@@ -1,9 +1,9 @@
 Hey! This repo combines my ZSA Moonlander's online Oryx layout with custom QMK firmware, a custom Windhawk mod, and CopyQ text tools. The Oryx web configurator is limited so I supplemented it with custom code. The additions:
 
 - A 12-note chromatic MIDI piano layer
-- Hebrew/English language-aware RGB (requires the accompanying Windhawk mod)
+- Hebrew/English language-aware RGB: English keeps Oryx's green base colour; Hebrew substitutes the brown used by Layer 2's black MIDI keys while preserving individually coloured keys (requires the accompanying Windhawk mod)
 - Smart Title Case and case switching functionality (requires the accompanying CopyQ commands)
-- A language correction feature that transplaces Hebrew characters with their English equivalent on a QWERTY layout, and vice versa (requires CopyQ). This fixes the problem of typing an entire English sentence only to discover that Hebrew characters were active.
+- A language correction feature that transplants Hebrew characters to their physical English QWERTY equivalents, and vice versa (requires CopyQ). This fixes the problem of typing an entire sentence with the wrong input language active.
 - Some custom keys and functions; for example, quickly double tapping the right space key outputs ". " just like on my mobile phone
 
 The beauty of this setup is that it uses CI to build everything automatically, merging Oryx and my custom code cleanly and outputting a compiled `.bin` file to flash. Full credit to poulainpi for that functionality: https://github.com/poulainpi/oryx-with-custom-qmk
@@ -27,7 +27,7 @@ This repository provides custom QMK firmware for the ZSA Moonlander keyboard, co
 - **CI/CD Pipeline**: Automated Oryx → patch → build → release workflow
 - **MIDI Engine (Layer 2)**: A 26-note polyphonic MIDI controller featuring independent melody/bass splits and a dynamic thumb-controlled transpose shifter
 
-The key innovation: Oryx (ZSA's online layout editor) has no native MIDI support. Instead of manually maintaining merge-conflict-prone `keymap.c` files, this project downloads fresh Oryx source in CI, runs `scripts/patch_keymap.py` to inject custom code, builds via Docker, and publishes `.bin` firmware. **No merge conflicts. Only custom code is tracked.**
+The key innovation: Oryx (ZSA's online layout editor) has no native MIDI support. Instead of manually merging generated `keymap.c` files, CI downloads fresh Oryx source, applies deterministic custom patches, builds in Docker, publishes a verified `.bin`, and then synchronizes the patched `3aMQz/` snapshot back to the repository. Custom logic remains separate from generated source, while the generated snapshot stays available for inspection and rollback.
 
 ## <a id="fkey-ref"></a>F-key Availability Quick Reference
 
@@ -36,22 +36,21 @@ Use this table at a glance when adding a new function:
 | F-key | Status | Notes |
 |---|---|---|
 | **F14**, **F15**, **F16**, **F17** | **Free** | No standard OS/browser shortcuts |
-| **F20**, **F21**, **F23** | **Free** | No standard OS/browser shortcuts |
+| **F20**, **F21**, **F23**, **F24** | **Free** | Not emitted by the current firmware or assigned to a host tool; `F24` appears only in legacy migration detection |
 | F1–F12 | Reserved | Layer 1 function row (also all have standard OS/browser shortcuts for refresh, search, fullscreen, etc.) |
 | F18 | Reserved | Language switch — wired to the left-thumb tap-dance key (k40) and Windhawk |
 | F13 | Reserved | CopyQ Smart Title Case — right-space triple tap |
 | F19 | Reserved | CopyQ upper/lower toggle — left-space triple tap |
 | F22 | Reserved | CopyQ Hebrew/English transplantation — language-key double tap |
-| F24 | Reserved | Period-space shortcut (DUAL_FUNC_3, Layer 3 right-hand dual-function key) |
 
-The 7 free keys above (`F14`–`F17`, `F20`, `F21`, `F23`) are neither mapped in firmware nor assigned to these host tools.
+The 8 free keys above (`F14`–`F17`, `F20`, `F21`, `F23`, `F24`) are neither mapped in the current firmware nor assigned to these host tools.
 
 ## Project Structure
 
 ```
 Working-Oryx-QMK-Sync/
 ├── custom_qmk/               ← Canonical custom firmware (custom_code.c)
-│   └── custom_code.c         ← MIDI bass shifter, language RGB, tap-dance handlers
+│   └── custom_code.c         ← MIDI bass shifter and language RGB overlay
 ├── scripts/                  ← Python patching engine
 │   └── patch_keymap.py       ← 11+ deterministic transformations injected into Oryx source
 ├── host_tools/copyq/         ← CopyQ transformations, protected transaction, installer, tests
@@ -144,11 +143,11 @@ Three keys have reduced tapping terms to favor tapping over holding during fast 
 
 ### 2. Language-Aware RGB
 
-The base layer keeps its normal Oryx colours for **English**. For **Hebrew**, only Oryx's dominant base colour is replaced with Layer 5's dominant turquoise (currently `HSV 131, 252, 242`). State is synced from Windows over RAW HID using Oryx's `ORYX_STATUS_LED_CONTROL` command (`0x0A`):
+The base layer keeps its normal Oryx colours for **English**. For **Hebrew**, only Oryx's dominant base colour is replaced with the brown assigned to Layer 2's ten black/accidental MIDI melody keys (currently `HSV 12, 255, 255`). State is synced from Windows over RAW HID using Oryx's `ORYX_STATUS_LED_CONTROL` command (`0x0A`):
 - Param[0] = `0x00` → English
 - Param[0] = `0x01` → Hebrew
 
-`patch_keymap.py` detects the unique most-common non-black HSV triplets in Oryx layers 0 and 5 and injects both as the language-colour contract. The Hebrew overlay changes only LEDs whose original layer-0 colour exactly matches its dominant triplet, rendering the replacement through Oryx's normal brightness-aware HSV path. Individually assigned colours—including the language key colour—remain under Oryx control, Caps Lock still overrides its own key, and all higher-layer colours remain unchanged.
+`patch_keymap.py` detects Layer 0's unique dominant non-black HSV triplet and reads the replacement from the ten semantic LED positions used by Layer 2's black MIDI melody keys. All ten source positions must agree on one non-black colour or patching fails. The Hebrew overlay changes only LEDs whose original Layer 0 colour exactly matches the detected base triplet, rendering the replacement through Oryx's normal brightness-aware HSV path. Individually assigned colours—including the language key colour—remain under Oryx control, Caps Lock still overrides its own key, and all higher-layer colours remain unchanged.
 
 ### 3. Tap-Dance Stabilization
 
@@ -268,11 +267,11 @@ Triggered manually via **Actions → Fetch and build layout** (`fetch-and-build-
 **Parameters**: Layout ID (`3aMQz`), geometry (`moonlander/reva`).
 
 **Steps**:
-1. Validates the requested layout and Oryx response, then downloads a tested source ZIP.
+1. Validates the requested layout and Oryx response—including Oryx's integer-valued QMK strings such as `"25.0"`—then downloads and checks the source ZIP.
 2. Runs the repository test suite before resolving QMK.
 3. Applies `scripts/patch_keymap.py` twice and requires byte-identical patched trees.
 4. Checks out the exact `firmware<version>` ZSA QMK branch at a recorded commit; missing branches fail instead of falling back to `master`.
-5. Builds in a dated container and records the base image digest, compiler, and Python versions.
+5. Pulls the dated base image explicitly, builds the QMK container, and records the resolved base-image digest, compiler, and Python versions.
 6. Requires exactly one non-empty firmware candidate and its matching ELF.
 7. Publishes a unique, non-overwriting release containing the `.bin`, its SHA-256 checksum, and a provenance manifest.
 8. Downloads the published assets and verifies their names and checksum before synchronizing `3aMQz/`.
@@ -284,6 +283,17 @@ Triggered manually via **Actions → Fetch and build layout** (`fetch-and-build-
 - **Hardware accepted** → Wally, Keymapp, or ZSA's flasher successfully flashed that exact `.bin`, and the Moonlander reconnected and operated normally.
 
 A green workflow deliberately stops at **CI-verified candidate**. GitHub Actions cannot prove that the physical keyboard accepted the image.
+
+### Verified reference candidate
+
+The first complete run of the hardened pipeline passed on 2026-07-21: [workflow run `29808688464`](https://github.com/YiftahCooper/Moonlander-Custom-Config/actions/runs/29808688464). It built Oryx revision `v6Grvl` with ZSA QMK `firmware25` at commit `717745325af7e8c92a1ec78faaa9abf8db321d5e`, then published and downloaded the exact three-asset release for verification:
+
+- [Release and flashable firmware](https://github.com/YiftahCooper/Moonlander-Custom-Config/releases/tag/firmware-moonlander_reva-3aMQz-v6Grvl-58cd00705ac8-717745325af7)
+- Firmware: `zsa_moonlander_reva_3aMQz.bin` — 55,872 bytes, SHA-256 `05b5a9a40b1fd9d4a23f17e09e73af59aacba35ac9a8eabaf8bab586ddc7440b`
+- Provenance: `zsa_moonlander_reva_3aMQz.bin.manifest.json`
+- Portable checksum: `zsa_moonlander_reva_3aMQz.bin.sha256`
+
+This receipt proves the complete CI path for the then-current turquoise Hebrew overlay, immediate thumb-tap triggers, release inventory, and downloaded checksum. It is retained as a historical pipeline reference, but it does **not** verify the newer brown black-MIDI-key colour source. The next workflow run must create a new CI-verified candidate for that change, and hardware acceptance still requires flashing and testing that exact new binary.
 
 **What the patch script injects**:
 - MIDI custom-keycode enum near top of `keymap.c`
@@ -329,17 +339,22 @@ A green workflow deliberately stops at **CI-verified candidate**. GitHub Actions
 ### Local Testing
 
 ```bash
-# Clone the ZSA QMK fork
-git clone --depth 1 https://github.com/zsa/qmk_firmware.git qmk_firmware
-cd qmk_firmware
-git checkout firmware25
-git submodule update --init --recursive
+# From the repository root, reproduce the QMK input recorded by the
+# 2026-07-21 reference manifest. Use a later manifest's identities when
+# reproducing a later release.
+git init qmk_firmware
+git -C qmk_firmware remote add origin https://github.com/zsa/qmk_firmware.git
+git -C qmk_firmware fetch --depth 1 origin 717745325af7e8c92a1ec78faaa9abf8db321d5e
+git -C qmk_firmware checkout --detach 717745325af7e8c92a1ec78faaa9abf8db321d5e
+git -C qmk_firmware submodule update --init --recursive --depth 1
 
-# Copy your layout
-cp -r ../3aMQz keyboards/zsa/moonlander/reva/keymaps/
+mkdir -p qmk_firmware/keyboards/zsa/moonlander/reva/keymaps
+cp -r 3aMQz qmk_firmware/keyboards/zsa/moonlander/reva/keymaps/
 
-# Build
-make zsa/moonlander/reva:3aMQz
+docker pull debian:bookworm-20260713-slim
+docker build --pull --tag moonlander-qmk:local .
+docker run --rm --volume "$PWD/qmk_firmware:/root" moonlander-qmk:local \
+  /bin/sh -c 'make zsa/moonlander/reva:3aMQz'
 ```
 
 ## Design Decisions

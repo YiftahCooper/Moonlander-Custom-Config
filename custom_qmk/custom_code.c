@@ -46,8 +46,8 @@ static bool bass_active[MATRIX_ROWS][MATRIX_COLS];
 #endif  // MIDI_ADVANCED
 
 static bool language_is_hebrew = false;
-// Hebrew replaces only Oryx's detected layer-0 base colour with the detected
-// dominant colour from layer 5. All other per-key Oryx colours remain untouched.
+// Hebrew replaces only Oryx's detected layer-0 base colour with the colour of
+// layer 2's black MIDI keys. All other per-key Oryx colours remain untouched.
 static const uint16_t LANGUAGE_TOGGLE_GUARD_MS = 250;
 
 // Suppress duplicate language flips caused by accidental re-triggering/bounce.
@@ -110,11 +110,11 @@ void custom_language_rgb_overlay(void) {
 
 #if !defined(MOONLANDER_BASE_H) || !defined(MOONLANDER_BASE_S) || !defined(MOONLANDER_BASE_V) || \
     !defined(MOONLANDER_HEBREW_H) || !defined(MOONLANDER_HEBREW_S) || !defined(MOONLANDER_HEBREW_V)
-#error "patch_keymap.py must inject the Oryx layer-0 and layer-5 language colours"
+#error "patch_keymap.py must inject the Oryx base and black-MIDI-key language colours"
 #endif
 
     // Use Oryx's own conversion path so the source hue, saturation, configured
-    // value, and global brightness behave exactly like layer 5.
+    // value, and global brightness behave exactly like the black MIDI keys.
     RGB hebrew_rgb = hsv_to_rgb_with_value((HSV){
         .h = MOONLANDER_HEBREW_H,
         .s = MOONLANDER_HEBREW_S,
