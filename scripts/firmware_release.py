@@ -42,6 +42,46 @@ def validate_geometry(value: str) -> str:
     return value
 
 
+def parse_oryx_revision(payload: Mapping[str, object]) -> dict[str, object]:
+    """Validate and normalize the revision returned by Oryx GraphQL."""
+    errors = payload.get("errors")
+    if errors not in (None, []):
+        raise ValueError("Oryx GraphQL response contains errors")
+
+    data = payload.get("data")
+    layout = data.get("layout") if isinstance(data, Mapping) else None
+    revision = layout.get("revision") if isinstance(layout, Mapping) else None
+    if not isinstance(revision, Mapping):
+        raise ValueError("Oryx response is missing data.layout.revision")
+
+    hash_id = revision.get("hashId")
+    if not isinstance(hash_id, str) or re.fullmatch(r"[A-Za-z0-9_-]+", hash_id) is None:
+        raise ValueError("Oryx response contains an invalid revision hash")
+
+    raw_qmk_version = revision.get("qmkVersion")
+    firmware_version: int | None = None
+    if isinstance(raw_qmk_version, int) and not isinstance(raw_qmk_version, bool):
+        firmware_version = raw_qmk_version
+    elif isinstance(raw_qmk_version, float) and raw_qmk_version.is_integer():
+        firmware_version = int(raw_qmk_version)
+    elif isinstance(raw_qmk_version, str) and re.fullmatch(r"[0-9]+(?:\.0+)?", raw_qmk_version):
+        firmware_version = int(raw_qmk_version.split(".", maxsplit=1)[0])
+    if firmware_version is None or firmware_version < 1:
+        raise ValueError("Oryx response contains an invalid QMK version")
+
+    title = revision.get("title")
+    change_description = (
+        title.replace("\r", " ").replace("\n", " ")
+        if isinstance(title, str) and title
+        else "latest layout modification made with Oryx"
+    )
+    return {
+        "hash_id": hash_id,
+        "firmware_version": firmware_version,
+        "change_description": change_description,
+    }
+
+
 def select_firmware(candidates: list[Path], geometry: str, layout_id: str) -> Path:
     validate_geometry(geometry)
     validate_layout_id(layout_id)
@@ -136,6 +176,8 @@ def _parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate-inputs")
     validate.add_argument("--layout-id", required=True)
     validate.add_argument("--geometry", required=True)
+    parse_oryx = subparsers.add_parser("parse-oryx-response")
+    parse_oryx.add_argument("--response", required=True, type=Path)
     package = subparsers.add_parser("package")
     package.add_argument("--qmk-dir", required=True, type=Path)
     package.add_argument("--dist-dir", required=True, type=Path)
@@ -149,6 +191,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "validate-inputs":
             validate_layout_id(args.layout_id)
             validate_geometry(args.geometry)
+            return 0
+        if args.command == "parse-oryx-response":
+            payload = json.loads(args.response.read_text(encoding="utf-8"))
+            revision = parse_oryx_revision(payload)
+            print(json.dumps(revision, sort_keys=True))
             return 0
         if args.command == "package":
             metadata = json.loads(args.metadata.read_text(encoding="utf-8"))

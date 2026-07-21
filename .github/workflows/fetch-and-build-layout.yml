@@ -75,17 +75,11 @@ jobs:
             --data @graphql-request.json \
             --output response.json
 
-          jq -e '(.errors // []) | length == 0' response.json > /dev/null
-          hash_id="$(jq -er '.data.layout.revision.hashId | strings | select(length > 0)' response.json)"
-          firmware_version="$(jq -er '.data.layout.revision.qmkVersion | numbers | select(floor == .)' response.json)"
-          change_description="$(jq -r '.data.layout.revision.title // "" | tostring' response.json)"
-          [[ "${hash_id}" =~ ^[A-Za-z0-9_-]+$ ]]
-          [[ "${firmware_version}" =~ ^[0-9]+$ ]]
-          change_description="${change_description//$'\r'/ }"
-          change_description="${change_description//$'\n'/ }"
-          if [ -z "${change_description}" ]; then
-            change_description="latest layout modification made with Oryx"
-          fi
+          python3 scripts/firmware_release.py parse-oryx-response \
+            --response response.json > oryx-revision.json
+          hash_id="$(jq -er '.hash_id' oryx-revision.json)"
+          firmware_version="$(jq -er '.firmware_version' oryx-revision.json)"
+          change_description="$(jq -er '.change_description' oryx-revision.json)"
 
           curl --fail-with-body --silent --show-error --location \
             --retry 3 --retry-all-errors \
@@ -95,7 +89,7 @@ jobs:
           rm -rf oryx_source
           mkdir oryx_source
           unzip -oj source.zip '*_source/*' -d oryx_source
-          rm source.zip graphql-request.json response.json
+          rm source.zip graphql-request.json response.json oryx-revision.json
 
           test -f "oryx_source/keymap.c"
           test -f "oryx_source/config.h"

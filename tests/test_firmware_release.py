@@ -1,9 +1,12 @@
 import hashlib
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
+from scripts import firmware_release
 from scripts.firmware_release import (
     package_release,
     select_firmware,
@@ -11,6 +14,78 @@ from scripts.firmware_release import (
     validate_layout_id,
     write_manifest,
 )
+
+
+class OryxRevisionParsingTests(unittest.TestCase):
+    @staticmethod
+    def payload(qmk_version: object = "25.0", title: object = "Keyboard layout edited.") -> dict[str, object]:
+        return {
+            "data": {
+                "layout": {
+                    "revision": {
+                        "hashId": "v6Grvl",
+                        "qmkVersion": qmk_version,
+                        "title": title,
+                    }
+                }
+            }
+        }
+
+    def test_accepts_oryx_integer_valued_string_version(self):
+        self.assertTrue(
+            hasattr(firmware_release, "parse_oryx_revision"),
+            "parse_oryx_revision must normalize Oryx's qmkVersion schema",
+        )
+        self.assertEqual(
+            firmware_release.parse_oryx_revision(self.payload()),
+            {
+                "hash_id": "v6Grvl",
+                "firmware_version": 25,
+                "change_description": "Keyboard layout edited.",
+            },
+        )
+
+    def test_accepts_numeric_integer_version_and_sanitizes_title(self):
+        parsed = firmware_release.parse_oryx_revision(
+            self.payload(25.0, "Keyboard\r\nlayout edited.")
+        )
+
+        self.assertEqual(parsed["firmware_version"], 25)
+        self.assertEqual(parsed["change_description"], "Keyboard  layout edited.")
+
+    def test_rejects_graphql_errors_and_non_integer_versions(self):
+        invalid_payloads = (
+            {"errors": [{"message": "layout unavailable"}]},
+            self.payload(25.5),
+            self.payload("25.5"),
+            self.payload(True),
+            self.payload("firmware25"),
+        )
+
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                firmware_release.parse_oryx_revision(payload)
+
+    def test_parse_oryx_response_cli_outputs_normalized_json(self):
+        with tempfile.TemporaryDirectory() as temp:
+            response_path = Path(temp) / "response.json"
+            response_path.write_text(json.dumps(self.payload()), encoding="utf-8")
+            stdout = io.StringIO()
+
+            with redirect_stdout(stdout):
+                result = firmware_release.main(
+                    ["parse-oryx-response", "--response", str(response_path)]
+                )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            json.loads(stdout.getvalue()),
+            {
+                "hash_id": "v6Grvl",
+                "firmware_version": 25,
+                "change_description": "Keyboard layout edited.",
+            },
+        )
 
 
 class InputValidationTests(unittest.TestCase):

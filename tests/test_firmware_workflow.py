@@ -44,8 +44,12 @@ class FirmwareWorkflowContractTests(unittest.TestCase):
     def test_oryx_download_fails_closed_and_validates_schema(self):
         self.assertGreaterEqual(self.workflow.count("--fail-with-body"), 2)
         self.assertGreaterEqual(self.workflow.count("--retry-all-errors"), 2)
-        self.assertIn(".data.layout.revision.hashId | strings | select(length > 0)", self.workflow)
-        self.assertIn(".data.layout.revision.qmkVersion | numbers", self.workflow)
+        self.assertIn(
+            "python3 scripts/firmware_release.py parse-oryx-response",
+            self.workflow,
+        )
+        self.assertIn("--response response.json", self.workflow)
+        self.assertNotIn(".data.layout.revision.qmkVersion | numbers", self.workflow)
         self.assertIn("unzip -t source.zip", self.workflow)
         for required in ("oryx_source/keymap.c", "oryx_source/config.h", "oryx_source/rules.mk"):
             self.assertIn(f'test -f "{required}"', self.workflow)
