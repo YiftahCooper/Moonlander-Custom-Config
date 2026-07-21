@@ -79,6 +79,11 @@ class FirmwareWorkflowContractTests(unittest.TestCase):
         self.assertIn("FROM debian:bookworm-20260713-slim", dockerfile)
         self.assertRegex(dockerfile, r"qmk==[0-9]")
         self.assertRegex(dockerfile, r"appdirs==[0-9]")
+        pull = 'docker pull --quiet "${base_tag}"'
+        inspect = 'docker image inspect "${base_tag}"'
+        self.assertIn(pull, self.workflow)
+        self.assertIn(inspect, self.workflow)
+        self.assertLess(self.workflow.index(pull), self.workflow.index(inspect))
         self.assertIn("RepoDigests", self.workflow)
         self.assertIn("arm-none-eabi-gcc --version", self.workflow)
         self.assertIn("python3 --version", self.workflow)

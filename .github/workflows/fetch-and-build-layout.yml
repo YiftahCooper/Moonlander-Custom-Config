@@ -138,6 +138,7 @@ jobs:
           set -euo pipefail
           image_tag="moonlander-qmk:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           base_tag="debian:bookworm-20260713-slim"
+          docker pull --quiet "${base_tag}"
           docker build --pull --tag "${image_tag}" .
           container_base="$(docker image inspect "${base_tag}" --format '{{json .RepoDigests}}' | jq -er '.[0]')"
           compiler_version="$(docker run --rm "${image_tag}" /bin/sh -c 'arm-none-eabi-gcc --version | head -n 1')"
