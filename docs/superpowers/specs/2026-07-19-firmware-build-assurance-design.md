@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make every published Moonlander firmware release fail closed, traceable to its exact inputs, reproducible enough to diagnose, and protected from accidental replacement. A green cloud build will mean **CI-verified firmware candidate**; only a successful physical flash and reconnect can mean **hardware-accepted firmware**.
+Make every published Moonlander firmware release fail closed, traceable to its exact inputs, reproducible enough to diagnose, and protected from accidental replacement. A green cloud build means **CI-verified firmware candidate**; only a successful physical flash and reconnect can mean **hardware-accepted firmware**.
 
 ## Scope
 
@@ -26,14 +26,17 @@ Out of scope:
 - Changing tap dances, RGB behavior, CopyQ commands, or Windhawk behavior.
 - Redesigning the Oryx snapshot synchronization mechanism beyond removing the broken gitlink and preserving clear stage failures.
 
-## Current Evidence
+## Implementation Status and Evidence
 
-- Run `29696218074` linked an ELF, generated `zsa_moonlander_reva_3aMQz.bin`, and reported a 57,172-byte firmware image.
-- The same run uploaded and released the binary successfully.
-- Checkout cleanup still emitted exit code 128 because Git tracks `qmk_firmware` with mode `160000` while `.gitmodules` is absent.
-- The workflow silently falls back to QMK `master` when `firmware<qmkVersion>` is absent.
-- `Dockerfile` uses floating `debian:latest` and unpinned Python packages.
-- Release identity includes the Oryx revision but not the custom-source or QMK commit, so a later custom-code build can overwrite an older release for the same Oryx revision.
+Implemented and live-verified on 2026-07-21.
+
+- Commit `58cd00705ac81cf8ea4e4739696278261bf5bebe` contains the final provenance repair. Workflow run [`29808688464`](https://github.com/YiftahCooper/Moonlander-Custom-Config/actions/runs/29808688464) passed every gate from repository tests through downloaded-release verification and clean post-checkout completion.
+- Oryx revision `v6Grvl` reports QMK version `"25.0"`; `parse_oryx_revision()` validates and normalizes that integer-valued string to branch `firmware25` instead of rejecting Oryx's live schema.
+- The exact ZSA QMK commit was `717745325af7e8c92a1ec78faaa9abf8db321d5e`. No fallback branch is available.
+- The workflow explicitly loads `debian:bookworm-20260713-slim` before inspecting it. The manifest records `debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818`, GCC `12.2.1`, and Python `3.11.2`.
+- The verified firmware is `zsa_moonlander_reva_3aMQz.bin`, 55,872 bytes, SHA-256 `05b5a9a40b1fd9d4a23f17e09e73af59aacba35ac9a8eabaf8bab586ddc7440b`.
+- The unique release contains exactly the firmware, its portable checksum, and its provenance manifest. The workflow downloaded those assets and rechecked the checksum before synchronizing Oryx revision `v6Grvl` to `main` in commit `8d96e827b9584d0f497514e16b1bbea927b840df`.
+- Physical flash acceptance remains deliberately unclaimed.
 
 ## Architecture
 
@@ -127,4 +130,3 @@ The release tag includes the geometry, layout ID, Oryx hash, twelve characters o
 - A successful workflow labels the release as `CI-verified; physical flash not yet witnessed`.
 - A physical Keymapp/Zapp flash and keyboard reconnect remain the manual hardware-acceptance gate.
 - Verification: release body inspection plus manual flash receipt when Yiftah chooses to accept a candidate.
-

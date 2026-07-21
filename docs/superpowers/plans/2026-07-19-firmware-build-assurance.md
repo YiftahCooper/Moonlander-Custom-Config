@@ -1,6 +1,8 @@
 # Firmware Build Assurance Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status (2026-07-21): Implemented and CI-verified.** Workflow run [`29808688464`](https://github.com/YiftahCooper/Moonlander-Custom-Config/actions/runs/29808688464) passed the complete pipeline. It published the three-file release for Oryx `v6Grvl`, source commit `58cd00705ac81cf8ea4e4739696278261bf5bebe`, and ZSA QMK commit `717745325af7e8c92a1ec78faaa9abf8db321d5e`. Physical flash acceptance remains open.
+
+> This is the completed implementation record; checked steps preserve the test-first sequence and acceptance evidence.
 
 **Goal:** Turn the Oryx-to-Moonlander workflow into a fail-closed, provenance-rich firmware release pipeline while clearly separating CI verification from physical flash acceptance.
 
@@ -34,7 +36,7 @@
 - Produces: repository invariant `qmk_firmware` is an ignored runtime directory, never mode `160000`.
 - Consumes: existing workflow path `.github/workflows/fetch-and-build-layout.yml`.
 
-- [ ] **Step 1: Write failing repository-contract tests**
+- [x] **Step 1: Write failing repository-contract tests**
 
 Add tests that read the workflow and `.gitignore`, then assert:
 
@@ -51,18 +53,18 @@ def test_qmk_checkout_is_not_a_repository_gitlink(self):
 
 def test_qmk_runtime_clone_is_ignored_and_uses_runner_temp(self):
     self.assertIn("/qmk_firmware/", GITIGNORE.read_text(encoding="utf-8"))
-    self.assertIn('QMK_DIR="${RUNNER_TEMP}/qmk_firmware"', self.workflow)
+    self.assertIn('echo "QMK_DIR=${RUNNER_TEMP}/qmk_firmware"', self.workflow)
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 ```powershell
 python -m unittest tests.test_firmware_workflow.FirmwareWorkflowContractTests -v
 ```
 
-Expected: failures because `qmk_firmware` is still mode `160000`, is not ignored, and is cloned inside the checkout.
+Red-stage result recorded during implementation: failures because `qmk_firmware` was still mode `160000`, was not ignored, and was cloned inside the checkout.
 
-- [ ] **Step 3: Remove only the gitlink and ignore runtime clones**
+- [x] **Step 3: Remove only the gitlink and ignore runtime clones**
 
 ```powershell
 & 'C:\Program Files\Git\cmd\git.exe' rm --cached qmk_firmware
@@ -78,11 +80,11 @@ Append this exact entry to `.gitignore`:
 
 Change the workflow to export `QMK_DIR=${RUNNER_TEMP}/qmk_firmware` through `$GITHUB_ENV`; all later QMK paths must consume `$QMK_DIR`.
 
-- [ ] **Step 4: Run the focused test and verify GREEN**
+- [x] **Step 4: Run the focused test and verify GREEN**
 
 Run the command from Step 2. Expected: all contract tests pass.
 
-- [ ] **Step 5: Commit the isolated cleanup**
+- [x] **Step 5: Commit the isolated cleanup**
 
 ```powershell
 git add .gitignore .github/workflows/fetch-and-build-layout.yml tests/test_firmware_workflow.py
@@ -102,7 +104,7 @@ git commit -m "Remove invalid QMK gitlink"
 - Produces CLI `python scripts/firmware_release.py validate-inputs --layout-id ID --geometry GEOMETRY`.
 - Consumes: workflow-dispatch `layout_id` and `layout_geometry`.
 
-- [ ] **Step 1: Write failing pure validation tests**
+- [x] **Step 1: Write failing pure validation tests**
 
 Cover accepted `3aMQz` and `moonlander/reva`, rejected whitespace/shell metacharacters/path separators in layout IDs, and geometry values outside the workflow's declared list.
 
@@ -114,7 +116,7 @@ with self.assertRaises(ValueError):
     validate_geometry("moonlander/unknown")
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 ```powershell
 python -m unittest tests.test_firmware_release -v
@@ -122,28 +124,31 @@ python -m unittest tests.test_firmware_release -v
 
 Expected: import failure because `scripts/firmware_release.py` does not exist.
 
-- [ ] **Step 3: Implement standard-library validation**
+- [x] **Step 3: Implement standard-library validation**
 
 Use `re.fullmatch(r"[A-Za-z0-9_-]+", value)` for layout IDs and an explicit immutable set matching the workflow geometry choices. The CLI returns exit code `2` with a bounded message for invalid input.
 
-- [ ] **Step 4: Harden Oryx network and schema handling**
+- [x] **Step 4: Harden Oryx network and schema handling**
 
-Pass GitHub inputs through `env`, never interpolate them directly into shell programs. Use:
+Pass GitHub inputs through `env`, never interpolate them directly into shell programs. Submit a JSON GraphQL request, then normalize the validated response through the tested helper:
 
 ```bash
 curl --fail-with-body --silent --show-error --location \
   --retry 3 --retry-all-errors \
   'https://oryx.zsa.io/graphql' \
   --header 'Content-Type: application/json' \
-  --data "${graphql_request}" > response.json
+  --data @graphql-request.json \
+  --output response.json
 
-jq -e '.data.layout.revision.hashId | strings | select(length > 0)' response.json
-jq -e '.data.layout.revision.qmkVersion | numbers' response.json
+python3 scripts/firmware_release.py parse-oryx-response \
+  --response response.json > oryx-revision.json
 ```
+
+`parse_oryx_revision()` accepts positive integer QMK versions represented as integers, integer-valued floats, or integer-valued strings such as Oryx's live `"25.0"`; it rejects booleans, fractional values, malformed strings, GraphQL errors, missing revisions, and unsafe hashes.
 
 Download the source with the same retry/failure flags, require `unzip -t` success, extract into a fresh directory, and require `keymap.c`, `config.h`, and `rules.mk` before patching.
 
-- [ ] **Step 5: Run focused and full tests**
+- [x] **Step 5: Run focused and full tests**
 
 ```powershell
 python -m unittest tests.test_firmware_release tests.test_firmware_workflow -v
@@ -152,7 +157,7 @@ python -m unittest discover -s tests -v
 
 Expected: all tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add scripts/firmware_release.py tests/test_firmware_release.py .github/workflows/fetch-and-build-layout.yml
@@ -169,19 +174,19 @@ git commit -m "Validate Oryx firmware inputs"
 - Produces: source-test receipt from `python -m unittest discover -s tests -v`.
 - Produces: actual-download idempotence receipt containing the before/after SHA-256 of all patched files.
 
-- [ ] **Step 1: Add failing workflow-contract assertions**
+- [x] **Step 1: Add failing workflow-contract assertions**
 
 Require the unit-test step to precede QMK cloning and require two patcher invocations separated by a deterministic tree digest comparison.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 python -m unittest tests.test_firmware_workflow -v
 ```
 
-Expected: failures because the workflow does not run the full suite or patch the downloaded source twice.
+Red-stage result recorded during implementation: failures because the workflow did not run the full suite or patch the downloaded source twice.
 
-- [ ] **Step 3: Add source and idempotence gates**
+- [x] **Step 3: Add source and idempotence gates**
 
 Before downloading QMK, run:
 
@@ -199,7 +204,7 @@ second_digest="$(find oryx_source -type f -print0 | sort -z | xargs -0 sha256sum
 test "${first_digest}" = "${second_digest}"
 ```
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run the focused and full Python suites, then:
 
@@ -219,19 +224,19 @@ git commit -m "Gate firmware build on patch tests"
 - Produces workflow outputs `qmk_branch`, `qmk_commit`, `container_base`, `compiler_version`, and `python_version`.
 - Consumes Oryx `firmware_version`.
 
-- [ ] **Step 1: Add failing fail-closed contract tests**
+- [x] **Step 1: Add failing fail-closed contract tests**
 
 Assert the workflow contains no `git checkout master`, no `defaulting to master`, checks `refs/remotes/origin/firmware${firmware_version}`, checks out a detached resolved SHA, and records it in `$GITHUB_OUTPUT`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 python -m unittest tests.test_firmware_workflow -v
 ```
 
-Expected: failure against the current fallback.
+Red-stage result recorded during implementation: failure against the former fallback.
 
-- [ ] **Step 3: Implement exact QMK resolution**
+- [x] **Step 3: Implement exact QMK resolution**
 
 Clone into a fresh `$RUNNER_TEMP/qmk_firmware`, fetch only the required branch, and fail when it is absent:
 
@@ -247,7 +252,7 @@ git -C "${QMK_DIR}" submodule update --init --recursive
 
 Any fetch/ref-resolution failure stops the job. Emit the branch and full commit as step outputs.
 
-- [ ] **Step 4: Stabilize and identify the build image**
+- [x] **Step 4: Stabilize and identify the build image**
 
 Change the Docker base to:
 
@@ -257,7 +262,7 @@ FROM debian:bookworm-20260713-slim
 
 During implementation, resolve the pulled image's immutable `RepoDigest` after `docker pull`, record it as `container_base`, and make the build fail if no digest is available. Pin the installed `qmk` and `appdirs` Python package versions to the versions proven by the first successful candidate build. Print and record `arm-none-eabi-gcc --version` and `python3 --version`.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```powershell
 python -m unittest tests.test_firmware_workflow -v
@@ -278,38 +283,38 @@ git commit -m "Pin QMK firmware build inputs"
 - Produces: `write_manifest(path: Path, metadata: Mapping[str, object]) -> None`.
 - Produces: `dist/<firmware>`, `dist/<firmware>.sha256`, `dist/<firmware>.manifest.json`.
 
-- [ ] **Step 1: Write failing artifact tests**
+- [x] **Step 1: Write failing artifact tests**
 
 Cover zero candidates, multiple candidates, empty files, Moonlander `.hex`, wrong layout/geometry filename, one valid `.bin`, stable JSON ordering, byte length, and SHA-256.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 python -m unittest tests.test_firmware_release -v
 ```
 
-- [ ] **Step 3: Implement closed selection and canonical manifest output**
+- [x] **Step 3: Implement closed selection and canonical manifest output**
 
 Require exactly one candidate from a freshly cleaned QMK root. For Moonlander, require a `.bin`; require the matching `.elf` below `.build`. Copy only the selected firmware into a new `dist/` directory. Write JSON with `sort_keys=True`, UTF-8, and a trailing newline. The manifest contains:
 
 ```json
 {
-  "artifact": {"filename": "zsa_moonlander_reva_3aMQz.bin", "sha256": "...", "size_bytes": 57172},
+  "artifact": {"filename": "zsa_moonlander_reva_3aMQz.bin", "sha256": "05b5...440b", "size_bytes": 55872},
   "build": {"compiler": "...", "container_base": "...", "python": "..."},
-  "oryx": {"geometry": "moonlander/reva", "layout_id": "3aMQz", "qmk_version": 24, "revision": "..."},
+  "oryx": {"geometry": "moonlander/reva", "layout_id": "3aMQz", "qmk_version": 25, "revision": "v6Grvl"},
   "source": {"repository": "YiftahCooper/Moonlander-Custom-Config", "commit": "..."},
-  "zsa_qmk": {"branch": "firmware24", "commit": "..."},
+  "zsa_qmk": {"branch": "firmware25", "commit": "717745325af7..."},
   "verification": {"hardware_flash_witnessed": false, "level": "ci-verified-candidate"}
 }
 ```
 
 The checksum file uses the portable format `<sha256>  <filename>\n`.
 
-- [ ] **Step 4: Record ELF size evidence**
+- [x] **Step 4: Record ELF size evidence**
 
 Run `arm-none-eabi-size` against the ELF and save its output in the Actions log. QMK/linker failure remains authoritative for capacity; do not introduce an arbitrary hand-maintained byte ceiling.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```powershell
 python -m unittest tests.test_firmware_release -v
@@ -329,17 +334,17 @@ git commit -m "Add firmware provenance manifest"
 - Consumes: verified `dist/` and manifest metadata from Task 5.
 - Produces: one Actions artifact and one uniquely tagged GitHub release with an exact three-file inventory.
 
-- [ ] **Step 1: Add failing publication-contract tests**
+- [x] **Step 1: Add failing publication-contract tests**
 
 Require full action SHAs from Global Constraints, `if-no-files-found: error`, `overwrite_files: false`, three release assets, `target_commitish: ${{ github.sha }}`, a tag containing short source and QMK SHAs, and a post-release verification step.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 python -m unittest tests.test_firmware_workflow -v
 ```
 
-- [ ] **Step 3: Upgrade and pin actions**
+- [x] **Step 3: Upgrade and pin actions**
 
 Use exactly:
 
@@ -351,7 +356,7 @@ Use exactly:
 
 Upload the complete `dist/` inventory with `if-no-files-found: error`.
 
-- [ ] **Step 4: Construct a unique non-overwriting release**
+- [x] **Step 4: Construct a unique non-overwriting release**
 
 Build the tag in Bash from validated fields:
 
@@ -363,11 +368,11 @@ release_tag="firmware-${NORMALIZED_GEOMETRY}-${LAYOUT_ID}-${ORYX_HASH}-${source_
 
 Set `overwrite_files: false`, `target_commitish: ${{ github.sha }}`, and publish exactly the firmware, checksum, and manifest. The release body must say `CI-verified candidate; physical flash not yet witnessed`.
 
-- [ ] **Step 5: Verify the published release through GitHub's API**
+- [x] **Step 5: Verify the published release through GitHub's API**
 
 Use `gh release view "$RELEASE_TAG" --json assets,tagName,targetCommitish` to require the expected tag, source commit, three names, and sizes. Download the three assets into a new temporary directory and run `sha256sum --check` there. Failure leaves prior releases untouched and marks this run failed at publication verification.
 
-- [ ] **Step 6: Update documentation**
+- [x] **Step 6: Update documentation**
 
 Document the three assurance levels:
 
@@ -377,7 +382,7 @@ CI-verified candidate -> manifest, digest, inventory, and publication gates pass
 Hardware accepted -> Keymapp/Zapp flashed the file and the Moonlander reconnected successfully.
 ```
 
-- [ ] **Step 7: Verify and commit**
+- [x] **Step 7: Verify and commit**
 
 ```powershell
 python -m unittest discover -s tests -v
@@ -396,7 +401,7 @@ git commit -m "Verify published firmware releases"
 - Consumes: committed workflow hardening.
 - Produces: source, package, and publication receipts; physical acceptance remains manual.
 
-- [ ] **Step 1: Run all local verification fresh**
+- [x] **Step 1: Run all local verification fresh**
 
 ```powershell
 python -m unittest discover -s tests -v
@@ -406,11 +411,11 @@ python -m py_compile scripts/patch_keymap.py scripts/firmware_release.py
 git diff --check
 ```
 
-- [ ] **Step 2: Push the verified implementation to `main` and dispatch one workflow run**
+- [x] **Step 2: Push the verified implementation to `main` and dispatch one workflow run**
 
 Do not dispatch if push fails. Record the pushed commit and workflow run ID.
 
-- [ ] **Step 3: Check every CI receipt**
+- [x] **Step 3: Check every CI receipt**
 
 Require:
 
@@ -423,10 +428,10 @@ Require:
 - release publication and downloaded checksum verification pass;
 - Oryx snapshot synchronization either makes a layout-only commit or reports a clean no-op.
 
-- [ ] **Step 4: Preserve rollback and report the hardware boundary**
+- [x] **Step 4: Preserve rollback and report the hardware boundary**
 
 Keep the last known-good release. Do not delete or overwrite it. Report the new release as `CI-verified candidate` until Yiftah flashes it with Keymapp or Zapp, sees the flasher's successful validation, and confirms the Moonlander reconnects and types normally.
 
-- [ ] **Step 5: Correct only the failed stage if necessary**
+- [x] **Step 5: Correct only the failed stage if necessary**
 
 If the live run fails, preserve its logs and artifact, add a red-first regression at the failed boundary, change only the responsible task's files, rerun focused tests, and dispatch one corrected candidate. Do not repeat unrelated accepted work.
