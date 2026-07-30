@@ -205,6 +205,62 @@ class TripleTapPatchTests(unittest.TestCase):
         self.assertIn("case DOUBLE_TAP: register_code16(KC_CAPS);", patched)
         self.assertIn("case DOUBLE_TAP: tap_code16(KC_KP_DOT); tap_code16(KC_SPACE);", patched)
 
+    def test_language_interrupt_prefers_ctrl_only_while_key_is_still_pressed(self):
+        patched, changed = PATCH_KEYMAP._patch_f18_language_dance(load_fixture())
+
+        self.assertTrue(changed)
+        language_finished, found = PATCH_KEYMAP._get_function_body(
+            patched, "dance_0_finished"
+        )
+        self.assertTrue(found)
+        self.assertIn(
+            "state->count == 1 && state->interrupted && state->pressed",
+            language_finished,
+        )
+        self.assertNotIn(
+            "state->count == 1 && state->interrupted) {",
+            language_finished,
+        )
+
+    def test_only_language_dance_gets_100ms_tapping_term(self):
+        fixture = load_fixture()
+        patched, changed = PATCH_KEYMAP._set_language_switch_tapping_term(
+            fixture, PATCH_KEYMAP._discover_dance_indices(fixture)
+        )
+
+        self.assertTrue(changed)
+        tapping_body, found = PATCH_KEYMAP._get_function_body(
+            patched, "get_tapping_term"
+        )
+        self.assertTrue(found)
+        self.assertIn(
+            "case TD(DANCE_0): return (uint16_t)100;",
+            tapping_body,
+        )
+        self.assertNotIn("case TD(DANCE_1):", tapping_body)
+        self.assertNotIn("case TD(DANCE_2):", tapping_body)
+        self.assertIn("case KC_DELETE:", tapping_body)
+        self.assertIn("return TAPPING_TERM -120;", tapping_body)
+
+    def test_language_tapping_term_is_idempotent_from_an_unmarked_export(self):
+        marked_case = (
+            "\n\n        case TD(DANCE_0): return (uint16_t)100; "
+            "/* ORYX_LANG_TAP_TERM_PATCH */\n\n"
+        )
+        fixture = load_fixture().replace(marked_case, "\n", 1)
+        dance_indices = PATCH_KEYMAP._discover_dance_indices(fixture)
+
+        once, first_changed = PATCH_KEYMAP._set_language_switch_tapping_term(
+            fixture, dance_indices
+        )
+        twice, second_changed = PATCH_KEYMAP._set_language_switch_tapping_term(
+            once, dance_indices
+        )
+
+        self.assertTrue(first_changed)
+        self.assertTrue(second_changed)
+        self.assertEqual(twice, once)
+
     def test_dedicated_thumb_modifiers_have_no_tap_action(self):
         fixture = load_unpatched_oryx_fixture()
         patched, changed = PATCH_KEYMAP._patch_modifier_only_thumb_keys(fixture)

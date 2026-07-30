@@ -1,10 +1,14 @@
 # Immediate Thumb Tap Actions Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status (2026-07-21): Implemented and CI-verified.** The language action fires on press two, both space actions fire on press three, and workflow run [`29808688464`](https://github.com/YiftahCooper/Moonlander-Custom-Config/actions/runs/29808688464) compiled the resulting firmware successfully.
+
+> **Refinement (2026-07-30): Implemented; firmware CI and hardware acceptance remain pending.** The language dance alone now uses a 100 ms tapping term. Its hold-on-interrupt rule requires the key to remain physically pressed, preventing a released single tap followed by ordinary typing from being misclassified as Ctrl. The two space-dance tapping terms are unchanged.
+
+> This is the completed implementation record; checked steps preserve the test-first sequence and acceptance evidence.
 
 **Goal:** Emit the Moonlander text-tool F-keys at their terminal tap count instead of waiting for QMK's tap-dance settlement timeout.
 
-**Architecture:** `patch_keymap.py` will replace the three signature-detected `on_dance_<n>()` callbacks with guarded immediate actions. Per-dance flags suppress the later `finished` callback and are cleared by `reset`, so surplus taps are absorbed without producing another action.
+**Architecture:** `patch_keymap.py` replaces the three signature-detected `on_dance_<n>()` callbacks with guarded immediate actions. Per-dance flags suppress the later `finished` callback and are cleared by `reset`, so surplus taps are absorbed without producing another action.
 
 **Tech Stack:** Python 3 patcher and `unittest`; generated QMK C tap-dance callbacks.
 

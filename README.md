@@ -115,7 +115,7 @@ A modified QWERTY layout with dual-function thumb keys (managed in Oryx, snapsho
 | **DANCE_0** `Gui` `Alt` `[` `]` `MT(RAlt,Tab)` | **DUAL_FUNC_2** `'` `/` `←` `↓` `→` |
 
 - `MT(RAlt, Tab)`: Hold Right Alt, tap Tab.
-- **DANCE_0** (language key): single tap → `F18`, hold → `LeftCtrl`, second press → immediate `F22` transplantation
+- **DANCE_0** (language key): single tap → `F18`, hold → `LeftCtrl`, second press → immediate `F22` transplantation. Its dedicated 100 ms tapping term applies only to this dance. An interruption becomes Ctrl only while the key remains physically held; a released tap followed immediately by another key remains an `F18` tap.
 - **DUAL_FUNC_2** (custom override): tap → `ENTER`, hold → `SHIFT+ENTER`
 
 #### Row 5 — Thumb Cluster (k50–k55, 6 keys)
@@ -133,13 +133,14 @@ Once a terminal text-tool action fires, surplus taps in the same tap-dance windo
 
 #### Per-Key Tapping Term Overrides
 
-Three keys have reduced tapping terms to favor tapping over holding during fast typing:
+Four bindings have reduced tapping terms to favor tapping over holding during fast typing. The language-dance override is deliberately isolated: neither space dance inherits its 100 ms term.
 
 | Key | Override | Effect |
 |---|---|---|
 | `KC_I` | `TAPPING_TERM - 70` | Faster tap registration on the home-row letter I |
 | `KC_DELETE` | `TAPPING_TERM - 120` | Faster tap on the Delete key in the thumb cluster |
 | `KC_BSPC` | `TAPPING_TERM - 120` | Faster tap on the Backspace key in the thumb cluster |
+| Language `TD(DANCE_0)` | `100 ms` | Faster F18 single-tap decision; does not change either space dance |
 
 ### 2. Language-Aware RGB
 
@@ -154,7 +155,7 @@ The base layer keeps its normal Oryx colours for **English**. For **Hebrew**, on
 `patch_keymap.py` normalizes tap-dance handlers to fix tapping-term races:
 - `SINGLE_HOLD` → `SINGLE_TAP` fallback
 - `DOUBLE_SINGLE_TAP` → `DOUBLE_TAP`
-- Hold-preference on Space/Shift and F18 language dances
+- Hold-preference on Space/Shift, plus pressed-state-aware hold preference on the F18 language dance so a released tap is not converted into Ctrl by the next key
 - Signature-detected immediate terminal actions (`F22` on language press two, `F19`/`F13` on space press three), with build failure if any target cannot be identified safely
 
 ### 4. Windows Host Tools: CopyQ + Windhawk

@@ -33,7 +33,7 @@ IMMEDIATE_TAP_STATE_MARKER = "ORYX_TEXT_TOOLS_IMMEDIATE_STATE_PATCH"
 IMMEDIATE_TAP_ON_DANCE_MARKER = "ORYX_TEXT_TOOLS_IMMEDIATE_ON_DANCE_PATCH"
 IMMEDIATE_TAP_FINISHED_MARKER = "ORYX_TEXT_TOOLS_IMMEDIATE_FINISHED_PATCH"
 IMMEDIATE_TAP_RESET_MARKER = "ORYX_TEXT_TOOLS_IMMEDIATE_RESET_PATCH"
-LANGUAGE_SWITCH_TAPPING_TERM_MS = 2000
+LANGUAGE_SWITCH_TAPPING_TERM_MS = 100
 SPACE_DOT_TERM_SCALE_NUM = 6
 SPACE_DOT_TERM_SCALE_DEN = 5
 # Keep per-key tap windows from collapsing into impractically short ranges.
@@ -842,14 +842,14 @@ def _patch_language_switch_tap_dance(content: str, dance_indices: list[int]) -> 
     if has_finished:
         finished_body_new = finished_body
 
-        # Prefer hold (Ctrl) when the language key is interrupted by another key.
-        # This makes fast chords resolve to hold instead of accidental tap-toggles.
+        # Prefer hold (Ctrl) only when another key interrupts while the language
+        # key is still down. A released tap followed by typing remains a tap.
         if LANGUAGE_HOLD_PREF_MARKER not in finished_body_new:
             step_assign_pat = re.compile(
                 rf"dance_state\s*\[\s*{language_dance_idx}\s*\]\.step\s*=\s*dance_step\s*\(\s*state\s*\)\s*;"
             )
             step_assign_replacement = (
-                "if (state->count == 1 && state->interrupted) {\n"
+                "if (state->count == 1 && state->interrupted && state->pressed) {\n"
                 f"        dance_state[{language_dance_idx}].step = SINGLE_HOLD; /* {LANGUAGE_HOLD_PREF_MARKER} */\n"
                 "    } else {\n"
                 f"        dance_state[{language_dance_idx}].step = dance_step(state);\n"
@@ -1129,6 +1129,9 @@ def _find_language_switch_dance_index(content: str, dance_indices: list[int]) ->
         if not has_finished:
             continue
 
+        if "KC_F18" in finished_body and "KC_LEFT_CTRL" in finished_body:
+            return dance_idx
+
         if "LALT(KC_LEFT_SHIFT)" in finished_body and "KC_F23" in finished_body:
             return dance_idx
 
@@ -1143,8 +1146,7 @@ def _find_language_switch_dance_index(content: str, dance_indices: list[int]) ->
 
 def _set_language_switch_tapping_term(content: str, dance_indices: list[int]) -> tuple[str, bool]:
     """
-    Set a very long tapping term for the language switch key so tap wins unless
-    the key is intentionally held for around two seconds.
+    Set the explicit tapping term for only the F18/Ctrl/F22 language dance.
     """
     tapping_body, has_tapping = _get_function_body(content, "get_tapping_term")
     if not has_tapping:
@@ -1154,11 +1156,29 @@ def _set_language_switch_tapping_term(content: str, dance_indices: list[int]) ->
     if language_dance_idx is None:
         return content, False
 
-    cleanup_pat = re.compile(
-        rf"^\s*case\s+TD\s*\(\s*DANCE_\d+\s*\)\s*:\s*return\s+[^;]+\s*;\s*/\*\s*{LANGUAGE_TAP_TERM_MARKER}\s*\*/\s*$",
+    marked_case_pat = re.compile(
+        rf"^(?P<indent>[^\S\r\n]*)case\s+TD\s*\(\s*DANCE_(?P<dance>\d+)\s*\)\s*:\s*"
+        rf"return\s+[^;]+\s*;[^\S\r\n]*/\*[^\S\r\n]*{LANGUAGE_TAP_TERM_MARKER}[^\S\r\n]*\*/[^\S\r\n]*$",
         flags=re.MULTILINE,
     )
-    tapping_body = cleanup_pat.sub("", tapping_body)
+    marked_cases = list(marked_case_pat.finditer(tapping_body))
+    if len(marked_cases) == 1 and int(marked_cases[0].group("dance")) == language_dance_idx:
+        match = marked_cases[0]
+        canonical_case = (
+            f"{match.group('indent')}case TD(DANCE_{language_dance_idx}): "
+            f"return (uint16_t){LANGUAGE_SWITCH_TAPPING_TERM_MS}; "
+            f"/* {LANGUAGE_TAP_TERM_MARKER} */"
+        )
+        tapping_body_new = (
+            tapping_body[: match.start()]
+            + canonical_case
+            + tapping_body[match.end() :]
+        )
+        return _replace_function_body(content, "get_tapping_term", tapping_body_new), True
+
+    # Remove only stale marked case lines. Do not consume surrounding blank
+    # lines: doing so made the first and second patch pass byte-different.
+    tapping_body = marked_case_pat.sub("", tapping_body)
 
     dance_case_pat = re.compile(
         rf"case\s+TD\s*\(\s*DANCE_{language_dance_idx}\s*\)\s*:\s*return\s+[^;]+\s*;"
@@ -1320,8 +1340,9 @@ def _patch_f18_language_dance(content: str) -> tuple[str, bool]:
       1) Hold did not feel like a normal mod-tap. With HOLD_ON_OTHER_KEY_PRESS,
          pressing another key while holding interrupts the dance, and the stock
          dance_step() returns SINGLE_TAP -> it fired F18 instead of Ctrl. We force
-         an interrupted single press to resolve to SINGLE_HOLD (Ctrl), matching
-         every normal mod-tap key on the board.
+         an interrupted single press to resolve to SINGLE_HOLD (Ctrl) only while
+         the language key remains physically pressed. A released tap followed by
+         another key remains SINGLE_TAP.
       2) Double-tap and interrupted double-tap emit F22 for transplantation.
 
     Detection: the language dance is the one whose *_finished body taps/registers
@@ -1346,13 +1367,27 @@ def _patch_f18_language_dance(content: str) -> tuple[str, bool]:
 
         finished_new = finished_body
 
-        # (1) Hold preference: interrupted single press -> SINGLE_HOLD (Ctrl).
-        if LANGUAGE_F18_HOLD_MARKER not in finished_new:
+        # (1) Hold preference: only an interrupted key that remains physically
+        # pressed resolves to SINGLE_HOLD (Ctrl). Migrate the older over-broad
+        # marked condition which also converted released taps into holds.
+        old_hold_condition = "if (state->count == 1 && state->interrupted) {"
+        new_hold_condition = (
+            "if (state->count == 1 && state->interrupted && state->pressed) {"
+        )
+        if LANGUAGE_F18_HOLD_MARKER in finished_new:
+            if old_hold_condition in finished_new:
+                finished_new = finished_new.replace(
+                    old_hold_condition,
+                    new_hold_condition,
+                    1,
+                )
+                patched_any = True
+        else:
             step_assign_pat = re.compile(
                 rf"dance_state\s*\[\s*{idx}\s*\]\.step\s*=\s*dance_step\s*\(\s*state\s*\)\s*;"
             )
             step_replacement = (
-                "if (state->count == 1 && state->interrupted) {\n"
+                f"{new_hold_condition}\n"
                 f"        dance_state[{idx}].step = SINGLE_HOLD; /* {LANGUAGE_F18_HOLD_MARKER} */\n"
                 "    } else {\n"
                 f"        dance_state[{idx}].step = dance_step(state);\n"
@@ -1951,6 +1986,16 @@ def patch_keymap(layout_dir: str) -> None:
     else:
         print("No F18 language dance found to patch (skipping).")
 
+    content, language_term_patched = _set_language_switch_tapping_term(
+        content, dance_indices
+    )
+    if not language_term_patched:
+        raise RuntimeError("Could not set the F18 language dance tapping term")
+    print(
+        f"Set only the F18/Ctrl/F22 language dance tapping term to "
+        f"{LANGUAGE_SWITCH_TAPPING_TERM_MS}ms"
+    )
+
     # 4c) Add deterministic host text-tool triggers to the two space dances.
     # This is intentionally strict: an Oryx export whose behavior signatures no
     # longer match must fail rather than risk patching the wrong physical key.
@@ -1984,21 +2029,14 @@ def patch_keymap(layout_dir: str) -> None:
     else:
         print("No tap-dance DOUBLE_SINGLE_TAP fallback patching required.")
 
-    # 8) Keep tapping terms entirely Oryx-managed for now.
-    print("Skipping script-level tapping-term overrides (using Oryx tap terms).")
-    # Tap-term overrides are intentionally disabled for now.
-    # To re-enable, uncomment the block below:
+    # 8) Keep every non-language tapping term entirely Oryx-managed.
+    print("Keeping all non-language tapping terms at their Oryx values.")
+    # Other experimental tap-term overrides remain disabled:
     # content, space_dot_term_patched = _increase_space_dot_tapping_term(content, dance_indices)
     # if space_dot_term_patched:
     #     print("Raised dot+space dance tapping term by ~20%")
     # else:
     #     print("Warning: Could not raise dot+space dance tapping term.")
-    #
-    # content, language_term_patched = _set_language_switch_tapping_term(content, dance_indices)
-    # if language_term_patched:
-    #     print(f"Set language switch tapping term to {LANGUAGE_SWITCH_TAPPING_TERM_MS}ms")
-    # else:
-    #     print("Warning: Could not set language switch tapping term.")
     #
     # if RELAX_AGGRESSIVE_TAPPING_TERMS:
     #     content, tapping_term_changes = _relax_aggressive_tapping_terms(content)

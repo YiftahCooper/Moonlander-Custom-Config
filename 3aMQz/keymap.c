@@ -132,6 +132,7 @@ uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
             return TAPPING_TERM -120;
         case KC_BSPC:
             return TAPPING_TERM -120;
+        case TD(DANCE_0): return (uint16_t)100; /* ORYX_LANG_TAP_TERM_PATCH */
         default:
             return TAPPING_TERM;
     }
@@ -291,7 +292,7 @@ void dance_0_finished(tap_dance_state_t *state, void *user_data) {
         dance_state[0].step = MORE_TAPS; /* ORYX_TEXT_TOOLS_IMMEDIATE_FINISHED_PATCH_LANGUAGE */
         return;
     }
-    if (state->count == 1 && state->interrupted) {
+    if (state->count == 1 && state->interrupted && state->pressed) {
         dance_state[0].step = SINGLE_HOLD; /* ORYX_LANG_F18_HOLD_PREF_PATCH */
     } else {
         dance_state[0].step = dance_step(state);
