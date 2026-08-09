@@ -132,7 +132,7 @@ uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
             return TAPPING_TERM -120;
         case KC_BSPC:
             return TAPPING_TERM -120;
-        case TD(DANCE_0): return (uint16_t)100; /* ORYX_LANG_TAP_TERM_PATCH */
+        case TD(DANCE_0): return (uint16_t)130; /* ORYX_LANG_TAP_TERM_PATCH */
         default:
             return TAPPING_TERM;
     }

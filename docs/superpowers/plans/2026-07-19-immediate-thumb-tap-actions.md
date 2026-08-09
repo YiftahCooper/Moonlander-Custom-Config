@@ -2,7 +2,7 @@
 
 > **Status (2026-07-21): Implemented and CI-verified.** The language action fires on press two, both space actions fire on press three, and workflow run [`29808688464`](https://github.com/YiftahCooper/Moonlander-Custom-Config/actions/runs/29808688464) compiled the resulting firmware successfully.
 
-> **Refinement (2026-07-30): Implemented; firmware CI and hardware acceptance remain pending.** The language dance alone now uses a 100 ms tapping term. Its hold-on-interrupt rule requires the key to remain physically pressed, preventing a released single tap followed by ordinary typing from being misclassified as Ctrl. The two space-dance tapping terms are unchanged.
+> **Refinement (2026-07-30): Implemented; firmware CI and hardware acceptance remain pending.** The language dance alone now uses a 130 ms tapping term. Its hold-on-interrupt rule requires the key to remain physically pressed, preventing a released single tap followed by ordinary typing from being misclassified as Ctrl. The two space-dance tapping terms are unchanged.
 
 > This is the completed implementation record; checked steps preserve the test-first sequence and acceptance evidence.
 

@@ -222,7 +222,7 @@ class TripleTapPatchTests(unittest.TestCase):
             language_finished,
         )
 
-    def test_only_language_dance_gets_100ms_tapping_term(self):
+    def test_only_language_dance_gets_130ms_tapping_term(self):
         fixture = load_fixture()
         patched, changed = PATCH_KEYMAP._set_language_switch_tapping_term(
             fixture, PATCH_KEYMAP._discover_dance_indices(fixture)
@@ -234,7 +234,7 @@ class TripleTapPatchTests(unittest.TestCase):
         )
         self.assertTrue(found)
         self.assertIn(
-            "case TD(DANCE_0): return (uint16_t)100;",
+            "case TD(DANCE_0): return (uint16_t)130;",
             tapping_body,
         )
         self.assertNotIn("case TD(DANCE_1):", tapping_body)
@@ -244,7 +244,7 @@ class TripleTapPatchTests(unittest.TestCase):
 
     def test_language_tapping_term_is_idempotent_from_an_unmarked_export(self):
         marked_case = (
-            "\n\n        case TD(DANCE_0): return (uint16_t)100; "
+            "\n\n        case TD(DANCE_0): return (uint16_t)130; "
             "/* ORYX_LANG_TAP_TERM_PATCH */\n\n"
         )
         fixture = load_fixture().replace(marked_case, "\n", 1)

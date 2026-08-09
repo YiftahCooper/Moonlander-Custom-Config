@@ -14,7 +14,7 @@ Remove the user-visible QMK tap-dance settlement delay from the three Moonlander
 - After a terminal action fires, additional taps in the same tap-dance window are ignored.
 - The tap dance is not reset early. Its ordinary timeout closes the gesture silently, preventing a surplus tap from starting a new single-tap action.
 - Language single tap remains `F18`; language hold remains Left Ctrl.
-- The language dance alone uses a 100 ms tapping term. The left- and right-space dances retain their Oryx-generated timing.
+- The language dance alone uses a 130 ms tapping term. The left- and right-space dances retain their Oryx-generated timing.
 - An interrupted language press resolves to Ctrl only while the language key is still physically down. If it has already been released, the interruption remains an `F18` single tap.
 - Left-space single, hold, and double remain Space, Left Shift, and Caps Lock.
 - Right-space single and double remain Space and period-space.
@@ -46,7 +46,7 @@ Python patcher tests verify:
 - Finished handlers suppress delayed duplicate actions after immediate firing.
 - Reset handlers clear the fired guard without unregistering terminal F-keys.
 - Single, hold, and ordinary double actions remain unchanged.
-- The 100 ms tapping term is applied only to the detected language dance, and the released-tap interruption path remains `SINGLE_TAP`.
+- The 130 ms tapping term is applied only to the detected language dance, and the released-tap interruption path remains `SINGLE_TAP`.
 - Dance renumbering and second-pass idempotence still work.
 - Generated Oryx triple-repeat fallbacks remain removed.
 
