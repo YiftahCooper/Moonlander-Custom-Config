@@ -2,7 +2,7 @@
 // @id              moonlander-language-sync
 // @name            Moonlander Language Sync
 // @description     Maps F18 to Windows language switching and syncs EN/HE state to QMK RGB over RAW HID.
-// @version         2.0.1
+// @version         2.1.0
 // @include         explorer.exe
 // @compilerOptions -lsetupapi -lhid
 // ==/WindhawkMod==
@@ -20,9 +20,11 @@
 //
 // Transport uses Oryx's ORYX_STATUS_LED_CONTROL command (0x0A). Firmware reads
 // the mirrored boolean from rawhid_state.status_led_control.
-// After F18, Windows is checked every 10 ms until the language change is
-// confirmed (or 250 ms elapse); ordinary background synchronization continues
-// to use the configurable polling interval.
+// After F18, the predicted opposite EN/HE state is sent immediately. Windows is
+// then checked every 10 ms until the actual language is confirmed (or 250 ms
+// elapse), and any incorrect prediction is corrected. Validated HID device paths
+// are cached for the worker lifetime; failures fall back to full discovery.
+// Ordinary background synchronization uses the configurable polling interval.
 // ==/WindhawkModReadme==
 
 // ==WindhawkModSettings==
@@ -234,7 +236,43 @@ bool send_language_report_to_device(HANDLE device_handle, bool is_hebrew) {
         static_cast<ULONG>(report.size())) == TRUE;
 }
 
-bool send_language_state_to_keyboards(bool is_hebrew) {
+HANDLE open_language_device(const wchar_t* device_path) {
+    return CreateFileW(
+        device_path,
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+}
+
+bool try_send_cached_language_state(
+    bool is_hebrew,
+    const std::vector<std::wstring>& cached_device_paths) {
+    if (cached_device_paths.empty()) {
+        return false;
+    }
+
+    bool all_sent = true;
+    for (const std::wstring& device_path : cached_device_paths) {
+        HANDLE device_handle = open_language_device(device_path.c_str());
+        if (device_handle == INVALID_HANDLE_VALUE) {
+            all_sent = false;
+            continue;
+        }
+
+        if (!send_language_report_to_device(device_handle, is_hebrew)) {
+            all_sent = false;
+        }
+        CloseHandle(device_handle);
+    }
+    return all_sent;
+}
+
+bool discover_and_send_language_state(
+    bool is_hebrew,
+    std::vector<std::wstring>& cached_device_paths) {
     GUID hid_guid = {};
     HidD_GetHidGuid(&hid_guid);
     HDEVINFO device_info = SetupDiGetClassDevsW(
@@ -247,6 +285,7 @@ bool send_language_state_to_keyboards(bool is_hebrew) {
     }
 
     bool any_sent = false;
+    std::vector<std::wstring> discovered_device_paths;
     SP_DEVICE_INTERFACE_DATA interface_data = {};
     interface_data.cbSize = sizeof(interface_data);
 
@@ -286,14 +325,7 @@ bool send_language_state_to_keyboards(bool is_hebrew) {
             continue;
         }
 
-        HANDLE device_handle = CreateFileW(
-            detail_data->DevicePath,
-            GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            nullptr,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            nullptr);
+        HANDLE device_handle = open_language_device(detail_data->DevicePath);
         if (device_handle == INVALID_HANDLE_VALUE) {
             continue;
         }
@@ -301,12 +333,47 @@ bool send_language_state_to_keyboards(bool is_hebrew) {
         if (device_matches_filters(device_handle)
             && send_language_report_to_device(device_handle, is_hebrew)) {
             any_sent = true;
+            discovered_device_paths.push_back(detail_data->DevicePath);
         }
         CloseHandle(device_handle);
     }
 
     SetupDiDestroyDeviceInfoList(device_info);
+    if (any_sent) {
+        cached_device_paths.swap(discovered_device_paths);
+    } else {
+        cached_device_paths.clear();
+    }
     return any_sent;
+}
+
+bool send_language_state_to_keyboards(
+    bool is_hebrew,
+    std::vector<std::wstring>& cached_device_paths) {
+    if (!cached_device_paths.empty()) {
+        if (try_send_cached_language_state(is_hebrew, cached_device_paths)) {
+            if (g_settings.debug_logging) {
+                Wh_Log(
+                    L"Language sync HID cache hit: %lu device(s)",
+                    static_cast<unsigned long>(cached_device_paths.size()));
+            }
+            return true;
+        }
+
+        if (g_settings.debug_logging) {
+            Wh_Log(L"Language sync HID cache invalidated; rediscovering");
+        }
+        cached_device_paths.clear();
+    }
+
+    bool sent = discover_and_send_language_state(is_hebrew, cached_device_paths);
+    if (g_settings.debug_logging) {
+        Wh_Log(
+            L"Language sync HID discovery: %ls (%lu device(s) cached)",
+            sent ? L"sent" : L"not sent",
+            static_cast<unsigned long>(cached_device_paths.size()));
+    }
+    return sent;
 }
 
 DWORD WINAPI worker_thread_proc(void*) {
@@ -321,13 +388,17 @@ DWORD WINAPI worker_thread_proc(void*) {
         }
     }
 
-    bool have_last_state = false;
-    bool last_is_hebrew = false;
-    bool last_send_succeeded = false;
+    std::vector<std::wstring> cached_device_paths;
+    bool have_confirmed_state = false;
+    bool confirmed_is_hebrew = false;
+    bool confirmed_send_succeeded = false;
     DWORD next_unsent_retry_tick = 0;
     DWORD last_poll_tick = 0;
     bool awaiting_language_change = false;
     bool language_before_shortcut_is_hebrew = false;
+    bool have_prediction = false;
+    bool predicted_is_hebrew = false;
+    bool prediction_send_succeeded = false;
     DWORD fast_poll_started_tick = 0;
 
     while (WaitForSingleObject(g_stop_event, 0) == WAIT_TIMEOUT) {
@@ -339,11 +410,26 @@ DWORD WINAPI worker_thread_proc(void*) {
                 f18_dispatched_in_this_drain = true;
                 bool have_pre_switch_language =
                     get_active_language_is_hebrew(&language_before_shortcut_is_hebrew);
+                fast_poll_started_tick = GetTickCount();
                 trigger_language_shortcut();
                 awaiting_language_change = have_pre_switch_language;
-                fast_poll_started_tick = GetTickCount();
-                have_last_state = false;
-                last_send_succeeded = false;
+                have_prediction = false;
+                prediction_send_succeeded = false;
+                if (have_pre_switch_language) {
+                    predicted_is_hebrew = !language_before_shortcut_is_hebrew;
+                    have_prediction = true;
+                    prediction_send_succeeded =
+                        send_language_state_to_keyboards(predicted_is_hebrew, cached_device_paths);
+                    if (g_settings.debug_logging) {
+                        Wh_Log(
+                            L"Language sync optimistic send: %ls (%ls) after %lu ms",
+                            predicted_is_hebrew ? L"Hebrew" : L"English",
+                            prediction_send_succeeded ? L"sent" : L"not sent",
+                            GetTickCount() - fast_poll_started_tick);
+                    }
+                }
+                have_confirmed_state = false;
+                confirmed_send_succeeded = false;
                 next_unsent_retry_tick = 0;
                 last_poll_tick = 0;
             }
@@ -366,19 +452,47 @@ DWORD WINAPI worker_thread_proc(void*) {
 
                 if (!still_waiting_for_language_change) {
                     awaiting_language_change = false;
-                    bool state_changed = !have_last_state || is_hebrew != last_is_hebrew;
+                    bool state_changed =
+                        !have_confirmed_state || is_hebrew != confirmed_is_hebrew;
                     bool should_retry = !state_changed
-                        && !last_send_succeeded
+                        && !confirmed_send_succeeded
                         && (next_unsent_retry_tick == 0 || now >= next_unsent_retry_tick);
-                    if (state_changed || should_retry) {
-                        bool sent = send_language_state_to_keyboards(is_hebrew);
-                        last_is_hebrew = is_hebrew;
-                        have_last_state = true;
-                        last_send_succeeded = sent;
+                    bool prediction_matches_confirmed_state =
+                        have_prediction
+                        && prediction_send_succeeded
+                        && is_hebrew == predicted_is_hebrew;
+                    bool must_send_confirmed_state =
+                        (state_changed && !prediction_matches_confirmed_state)
+                        || should_retry;
+                    if (state_changed || should_retry || have_prediction) {
+                        bool sent = prediction_matches_confirmed_state;
+                        if (must_send_confirmed_state) {
+                            sent = send_language_state_to_keyboards(
+                                is_hebrew,
+                                cached_device_paths);
+                        }
+
+                        confirmed_is_hebrew = is_hebrew;
+                        have_confirmed_state = true;
+                        confirmed_send_succeeded = sent;
                         next_unsent_retry_tick = sent ? 0 : now + kRetryWhenNotSentMs;
 
                         if (g_settings.debug_logging) {
-                            if (sent) {
+                            if (have_prediction) {
+                                Wh_Log(
+                                    L"Language sync confirmation: %ls after %lu ms (%ls)",
+                                    is_hebrew ? L"Hebrew" : L"English",
+                                    now - fast_poll_started_tick,
+                                    prediction_matches_confirmed_state
+                                        ? L"prediction confirmed"
+                                        : L"prediction corrected");
+                                if (!prediction_matches_confirmed_state) {
+                                    Wh_Log(
+                                        L"Language sync correction: %ls (%ls)",
+                                        is_hebrew ? L"Hebrew" : L"English",
+                                        sent ? L"sent" : L"not sent");
+                                }
+                            } else if (sent) {
                                 Wh_Log(
                                     L"Language sync sent: %ls",
                                     is_hebrew ? L"Hebrew" : L"English");
@@ -388,6 +502,9 @@ DWORD WINAPI worker_thread_proc(void*) {
                                     kRetryWhenNotSentMs);
                             }
                         }
+
+                        have_prediction = false;
+                        prediction_send_succeeded = false;
                     }
                 }
             }
